@@ -1,0 +1,10 @@
+[package]
+name = "cody_emulator"
+version = "0.1.0"
+authors = ["iTitus"]
+edition = "2024"
+rust-version = "1.85"
+repository = "https://github.com/iTitus/cody_emulator"
+license = "MIT"
+
+[dependencies]
