@@ -1,5 +1,5 @@
 use crate::memory::Memory;
-use crate::opcode::{AddressingMode, Mnemonic, OPCODE_LOOKUP};
+use crate::opcode::{get_opcode, AddressingMode, Mnemonic};
 use bitfields::bitfield;
 
 #[bitfield(u8)]
@@ -46,7 +46,7 @@ impl<M: Memory> Cpu<M> {
 
     pub fn run(&mut self) {
         loop {
-            let opcode = OPCODE_LOOKUP[self.read_u8_inc_pc() as usize];
+            let opcode = get_opcode(self.read_u8_inc_pc());
             if let Some(opcode) = opcode {
                 match opcode.mnemonic {
                     Mnemonic::Invalid => unimplemented!(),

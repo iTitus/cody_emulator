@@ -1,4 +1,5 @@
 use lazy_static::lazy_static;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::io::{Read, Write};
 use strum::IntoStaticStr;
@@ -427,14 +428,16 @@ impl Display for Instruction {
 
 impl Instruction {
     fn get_opcode(&self) -> Option<&'static Opcode> {
-        // TODO: optimize
-        OPCODES.iter().find(|&opc| {
-            self.mnemonic == opc.mnemonic
-                && self.parameter_1.matches(opc.parameter_1)
-                && self
-                    .parameter_2
-                    .matches(opc.parameter_2.unwrap_or(AddressingMode::Implied))
-        })
+        if let Some(opc) = OPCODE_BY_MNEMONIC.get(&self.mnemonic) {
+            opc.iter().copied().find(|&opc| {
+                self.parameter_1.matches(opc.parameter_1)
+                    && self
+                        .parameter_2
+                        .matches(opc.parameter_2.unwrap_or(AddressingMode::Implied))
+            })
+        } else {
+            None
+        }
     }
 
     pub fn write(&self, mut w: impl Write) -> std::io::Result<()> {
@@ -476,7 +479,7 @@ impl Opcode {
     }
 }
 
-pub fn disasm(mut r: impl Read) -> Vec<Instruction> {
+pub fn disassemble(mut r: impl Read) -> Vec<Instruction> {
     let mut instructions = vec![];
     loop {
         let mut buf = [0];
@@ -500,6 +503,17 @@ pub fn disasm(mut r: impl Read) -> Vec<Instruction> {
         }
     }
     instructions
+}
+
+pub fn assemble(instructions: &[Instruction], mut w: impl Write) -> std::io::Result<()> {
+    for instruction in instructions {
+        instruction.write(&mut w)?;
+    }
+    Ok(())
+}
+
+pub fn get_opcode(opcode: u8) -> Option<&'static Opcode> {
+    OPCODE_LOOKUP[opcode as usize]
 }
 
 /// Unordered list of opcodes, do not use for opcode lookup!
@@ -784,7 +798,7 @@ pub static OPCODES: [Opcode; 212] = [
 
 lazy_static! {
     /// Lookup table for opcodes
-    pub static ref OPCODE_LOOKUP: [Option<&'static Opcode>; 256] = {
+    static ref OPCODE_LOOKUP: [Option<&'static Opcode>; 256] = {
         let mut opcodes: [Option<&'static Opcode>; 256] = [None; 256];
         for opc in &OPCODES {
             let n = opc.opcode as usize;
@@ -796,5 +810,14 @@ lazy_static! {
             }
         }
         opcodes
+    };
+
+    /// Lookup table for opcodes by mnemonic
+    static ref OPCODE_BY_MNEMONIC: HashMap<Mnemonic, Vec<&'static Opcode>> = {
+        let mut map: HashMap<Mnemonic, Vec<&'static Opcode>> = HashMap::new();
+        for opc in &OPCODES {
+            map.entry(opc.mnemonic).or_default().push(opc);
+        }
+        map
     };
 }
