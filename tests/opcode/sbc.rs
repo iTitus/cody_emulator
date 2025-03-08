@@ -1,8 +1,8 @@
 use cody_emulator::cpu::Cpu;
-use cody_emulator::memory::Program;
+use cody_emulator::memory::{sparse_memory_from_instructions, Memory};
 use cody_emulator::opcode::{InstructionParameter, Mnemonic};
 
-fn sbc(a: InstructionParameter, b: InstructionParameter, carry: bool) -> Cpu<Program> {
+fn sbc(a: InstructionParameter, b: InstructionParameter, carry: bool) -> Cpu<impl Memory> {
     let program = [
         if carry {
             Mnemonic::SEC.iinsn()
@@ -13,7 +13,7 @@ fn sbc(a: InstructionParameter, b: InstructionParameter, carry: bool) -> Cpu<Pro
         Mnemonic::SBC.insn(b),
         Mnemonic::STP.iinsn(),
     ];
-    Cpu::new(Program::from_instructions(&program))
+    Cpu::new(sparse_memory_from_instructions(&program))
 }
 
 fn sbc_check_immediates(a: u8, b: u8, carry: bool) {
