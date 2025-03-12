@@ -1,27 +1,19 @@
+use cody_emulator::assembler::{assemble, MnemonicDSL, Parameter};
 use cody_emulator::cpu::Cpu;
-use cody_emulator::memory::{sparse_memory_from_instructions, Memory};
-use cody_emulator::opcode::{InstructionParameter, Mnemonic};
-
-fn sbc(a: InstructionParameter, b: InstructionParameter, carry: bool) -> Cpu<impl Memory> {
-    let program = [
-        if carry {
-            Mnemonic::SEC.iinsn()
-        } else {
-            Mnemonic::CLC.iinsn()
-        },
-        Mnemonic::LDA.insn(a),
-        Mnemonic::SBC.insn(b),
-        Mnemonic::STP.iinsn(),
-    ];
-    Cpu::new(sparse_memory_from_instructions(&program))
-}
+use cody_emulator::memory::{Memory, Sparse};
+use cody_emulator::opcode::Opcode;
 
 fn sbc_check_immediates(a: u8, b: u8, carry: bool) {
-    let mut cpu = sbc(
-        InstructionParameter::Immediate(a),
-        InstructionParameter::Immediate(b),
-        carry,
-    );
+    let program = [
+        Opcode::SBC.with(Parameter::Immediate(b)),
+        Opcode::STP.instruction(),
+    ];
+    let mut memory = Sparse::default();
+    assemble(&program, &mut memory.memory).unwrap();
+    memory.write_u16(0xFFFC, 0x0200);
+    let mut cpu = Cpu::new(memory);
+    cpu.a = a;
+    cpu.p.set_carry(carry);
     cpu.run();
 
     let result_unsigned = a as i16 - b as i16 - !carry as i16;

@@ -1,5 +1,3 @@
-use crate::opcode::{assemble, Instruction};
-
 pub trait Memory {
     fn read_u8(&self, address: u16) -> u8;
 
@@ -18,7 +16,7 @@ pub trait Memory {
     }
 }
 
-struct Contiguous([u8; 0x10000]);
+pub struct Contiguous(pub [u8; 0x10000]);
 
 impl Default for Contiguous {
     fn default() -> Self {
@@ -36,11 +34,25 @@ impl Memory for Contiguous {
     }
 }
 
-struct Sparse {
-    zeropage: [u8; 0x100],
-    stack: [u8; 0x100],
-    last_page: [u8; 0x100],
-    memory: Vec<u8>,
+impl Contiguous {
+    /// Create memory with data placed at 0.
+    pub fn from_bytes(data: &[u8]) -> Self {
+        Self::from_bytes_at(data, 0)
+    }
+
+    /// Create memory with data placed at load_address.
+    pub fn from_bytes_at(data: &[u8], load_address: u16) -> Self {
+        let mut memory = Self::default();
+        memory.0[load_address as usize..].copy_from_slice(data);
+        memory
+    }
+}
+
+pub struct Sparse {
+    pub zeropage: [u8; 0x100],
+    pub stack: [u8; 0x100],
+    pub last_page: [u8; 0x100],
+    pub memory: Vec<u8>,
 }
 
 impl Default for Sparse {
@@ -83,37 +95,16 @@ impl Memory for Sparse {
     }
 }
 
-/// Create memory with instructions placed at load_address and the reset vector configured accordingly.
-pub fn memory_from_instructions(
-    instructions: &[Instruction],
-    load_address: u16,
-) -> impl Memory + use<> {
-    let mut memory = Contiguous::default();
-    assemble(instructions, &mut memory.0[load_address as usize..])
-        .expect("error assembling instructions");
-    memory.write_u16(0xFFFC, load_address);
-    memory
-}
-
-/// Create memory with data placed at load_address.
-pub fn memory_from_bytes(data: &[u8], load_address: u16) -> impl Memory + use<> {
-    let mut memory = Contiguous::default();
-    memory.0[load_address as usize..].copy_from_slice(data);
-    memory
-}
-
-/// Create sparse memory with instructions placed at 0x0200 and the reset vector configured accordingly.
-///
-/// Note that sparse memory cannot be written to arbitrarily.
-pub fn sparse_memory_from_instructions(instructions: &[Instruction]) -> impl Memory + use<> {
+impl Sparse {
     const MAX_LEN: usize = 0x10000 - 0x0300;
 
-    let mut memory = Sparse::default();
-    assemble(instructions, &mut memory.memory).expect("error assembling instructions");
-    assert!(memory.memory.len() < MAX_LEN);
-    memory
-        .memory
-        .resize(memory.memory.capacity().min(MAX_LEN), 0); // allocator gave us more bytes, so use them
-    memory.write_u16(0xFFFC, 0x0200);
-    memory
+    /// Create memory with data placed at 0x0200 and the reset vector configured accordingly.
+    pub fn from_bytes(data: &[u8]) -> Self {
+        let mut m = Self {
+            memory: data[..data.len().min(Self::MAX_LEN)].into(),
+            ..Default::default()
+        };
+        m.write_u16(0xFFFC, 0x0200);
+        m
+    }
 }

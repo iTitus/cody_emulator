@@ -1,5 +1,5 @@
 use crate::memory::Memory;
-use crate::opcode::{get_opcode, AddressingMode, Mnemonic};
+use crate::opcode::{get_instruction, AddressingMode, Opcode};
 use bitfields::bitfield;
 
 #[bitfield(u8)]
@@ -46,19 +46,18 @@ impl<M: Memory> Cpu<M> {
 
     pub fn run(&mut self) {
         loop {
-            let opcode = get_opcode(self.read_u8_inc_pc());
+            let opcode = get_instruction(self.read_u8_inc_pc());
             if let Some(opcode) = opcode {
-                match opcode.mnemonic {
-                    Mnemonic::Invalid => unimplemented!(),
-                    Mnemonic::ADC => {
+                match opcode.opcode {
+                    Opcode::ADC => {
                         let m = self.read_operand(opcode.parameter_1);
                         self.do_addition(m);
                     }
-                    Mnemonic::AND => {
+                    Opcode::AND => {
                         let m = self.read_operand(opcode.parameter_1);
                         self.set_a(self.a & m);
                     }
-                    Mnemonic::ASL => {
+                    Opcode::ASL => {
                         if opcode.parameter_1 == AddressingMode::Accumulator {
                             let m = self.a;
                             self.set_a(m << 1);
@@ -72,37 +71,37 @@ impl<M: Memory> Cpu<M> {
                             self.p.set_carry((m & 0x80) != 0);
                         }
                     }
-                    Mnemonic::BBR0 => self.bbr(0),
-                    Mnemonic::BBR1 => self.bbr(1),
-                    Mnemonic::BBR2 => self.bbr(2),
-                    Mnemonic::BBR3 => self.bbr(3),
-                    Mnemonic::BBR4 => self.bbr(4),
-                    Mnemonic::BBR6 => self.bbr(5),
-                    Mnemonic::BBR5 => self.bbr(6),
-                    Mnemonic::BBR7 => self.bbr(7),
-                    Mnemonic::BBS0 => self.bbs(0),
-                    Mnemonic::BBS1 => self.bbs(1),
-                    Mnemonic::BBS2 => self.bbs(2),
-                    Mnemonic::BBS3 => self.bbs(3),
-                    Mnemonic::BBS4 => self.bbs(4),
-                    Mnemonic::BBS6 => self.bbs(5),
-                    Mnemonic::BBS5 => self.bbs(6),
-                    Mnemonic::BBS7 => self.bbs(7),
-                    Mnemonic::BCC => self.branch(!self.p.carry()),
-                    Mnemonic::BCS => self.branch(self.p.carry()),
-                    Mnemonic::BEQ => self.branch(self.p.zero()),
-                    Mnemonic::BIT => {
+                    Opcode::BBR0 => self.bbr(0),
+                    Opcode::BBR1 => self.bbr(1),
+                    Opcode::BBR2 => self.bbr(2),
+                    Opcode::BBR3 => self.bbr(3),
+                    Opcode::BBR4 => self.bbr(4),
+                    Opcode::BBR6 => self.bbr(5),
+                    Opcode::BBR5 => self.bbr(6),
+                    Opcode::BBR7 => self.bbr(7),
+                    Opcode::BBS0 => self.bbs(0),
+                    Opcode::BBS1 => self.bbs(1),
+                    Opcode::BBS2 => self.bbs(2),
+                    Opcode::BBS3 => self.bbs(3),
+                    Opcode::BBS4 => self.bbs(4),
+                    Opcode::BBS6 => self.bbs(5),
+                    Opcode::BBS5 => self.bbs(6),
+                    Opcode::BBS7 => self.bbs(7),
+                    Opcode::BCC => self.branch(!self.p.carry()),
+                    Opcode::BCS => self.branch(self.p.carry()),
+                    Opcode::BEQ => self.branch(self.p.zero()),
+                    Opcode::BIT => {
                         let m = self.read_operand(opcode.parameter_1);
                         self.p.set_zero((self.a & m) == 0);
                         // TODO: some sources say this does not happen with immediate operand
                         self.p.set_negative((m & 0x80) != 0);
                         self.p.set_carry((m & 0x40) != 0);
                     }
-                    Mnemonic::BMI => self.branch(self.p.negative()),
-                    Mnemonic::BNE => self.branch(!self.p.zero()),
-                    Mnemonic::BPL => self.branch(!self.p.negative()),
-                    Mnemonic::BRA => self.branch(true),
-                    Mnemonic::BRK => {
+                    Opcode::BMI => self.branch(self.p.negative()),
+                    Opcode::BNE => self.branch(!self.p.zero()),
+                    Opcode::BPL => self.branch(!self.p.negative()),
+                    Opcode::BRA => self.branch(true),
+                    Opcode::BRK => {
                         // TODO: check correctness
                         // what happens if irqb_disable = 1?
                         self.pc += 1;
@@ -113,16 +112,16 @@ impl<M: Memory> Cpu<M> {
                         self.p.set_decimal_mode(false); // ?
                         self.pc = self.memory.read_u16(0xFFFE);
                     }
-                    Mnemonic::BVC => self.branch(!self.p.overflow()),
-                    Mnemonic::BVS => self.branch(self.p.overflow()),
-                    Mnemonic::CLC => self.p.set_carry(false),
-                    Mnemonic::CLD => self.p.set_decimal_mode(false),
-                    Mnemonic::CLI => self.p.set_irqb_disable(false),
-                    Mnemonic::CLV => self.p.set_overflow(false),
-                    Mnemonic::CMP => self.cmp(self.a, opcode.parameter_1),
-                    Mnemonic::CPX => self.cmp(self.x, opcode.parameter_1),
-                    Mnemonic::CPY => self.cmp(self.y, opcode.parameter_1),
-                    Mnemonic::DEC => {
+                    Opcode::BVC => self.branch(!self.p.overflow()),
+                    Opcode::BVS => self.branch(self.p.overflow()),
+                    Opcode::CLC => self.p.set_carry(false),
+                    Opcode::CLD => self.p.set_decimal_mode(false),
+                    Opcode::CLI => self.p.set_irqb_disable(false),
+                    Opcode::CLV => self.p.set_overflow(false),
+                    Opcode::CMP => self.cmp(self.a, opcode.parameter_1),
+                    Opcode::CPX => self.cmp(self.x, opcode.parameter_1),
+                    Opcode::CPY => self.cmp(self.y, opcode.parameter_1),
+                    Opcode::DEC => {
                         if opcode.parameter_1 == AddressingMode::Accumulator {
                             self.set_a(self.a.wrapping_sub(1));
                         } else {
@@ -133,13 +132,13 @@ impl<M: Memory> Cpu<M> {
                             self.update_nz_flags(new_value);
                         }
                     }
-                    Mnemonic::DEX => self.set_x(self.x.wrapping_sub(1)),
-                    Mnemonic::DEY => self.set_y(self.y.wrapping_sub(1)),
-                    Mnemonic::EOR => {
+                    Opcode::DEX => self.set_x(self.x.wrapping_sub(1)),
+                    Opcode::DEY => self.set_y(self.y.wrapping_sub(1)),
+                    Opcode::EOR => {
                         let m = self.read_operand(opcode.parameter_1);
                         self.set_a(self.a ^ m);
                     }
-                    Mnemonic::INC => {
+                    Opcode::INC => {
                         if opcode.parameter_1 == AddressingMode::Accumulator {
                             self.set_a(self.a.wrapping_add(1));
                         } else {
@@ -150,31 +149,31 @@ impl<M: Memory> Cpu<M> {
                             self.update_nz_flags(new_value);
                         }
                     }
-                    Mnemonic::INX => self.set_x(self.x.wrapping_add(1)),
-                    Mnemonic::INY => self.set_y(self.y.wrapping_add(1)),
-                    Mnemonic::JMP => {
+                    Opcode::INX => self.set_x(self.x.wrapping_add(1)),
+                    Opcode::INY => self.set_y(self.y.wrapping_add(1)),
+                    Opcode::JMP => {
                         let target = self.read_address(opcode.parameter_1);
                         self.pc = target;
                     }
-                    Mnemonic::JSR => {
+                    Opcode::JSR => {
                         let target = self.read_address(opcode.parameter_1);
                         self.pc = self.pc.wrapping_sub(1); // why?
                         self.push_pc();
                         self.pc = target;
                     }
-                    Mnemonic::LDA => {
+                    Opcode::LDA => {
                         let op = self.read_operand(opcode.parameter_1);
                         self.set_a(op);
                     }
-                    Mnemonic::LDX => {
+                    Opcode::LDX => {
                         let op = self.read_operand(opcode.parameter_1);
                         self.set_x(op);
                     }
-                    Mnemonic::LDY => {
+                    Opcode::LDY => {
                         let op = self.read_operand(opcode.parameter_1);
                         self.set_y(op);
                     }
-                    Mnemonic::LSR => {
+                    Opcode::LSR => {
                         if opcode.parameter_1 == AddressingMode::Accumulator {
                             let m = self.a;
                             self.set_a(m >> 1);
@@ -188,37 +187,37 @@ impl<M: Memory> Cpu<M> {
                             self.p.set_carry((m & 0b1) != 0);
                         }
                     }
-                    Mnemonic::NOP => {}
-                    Mnemonic::ORA => {
+                    Opcode::NOP => {}
+                    Opcode::ORA => {
                         let m = self.read_operand(opcode.parameter_1);
                         self.set_a(self.a | m);
                     }
-                    Mnemonic::PHA => self.push(self.a),
-                    Mnemonic::PHP => self.push_flags(),
-                    Mnemonic::PHX => self.push(self.x),
-                    Mnemonic::PHY => self.push(self.y),
-                    Mnemonic::PLA => {
+                    Opcode::PHA => self.push(self.a),
+                    Opcode::PHP => self.push_flags(),
+                    Opcode::PHX => self.push(self.x),
+                    Opcode::PHY => self.push(self.y),
+                    Opcode::PLA => {
                         let value = self.pop();
                         self.set_a(value);
                     }
-                    Mnemonic::PLP => self.pop_flags(),
-                    Mnemonic::PLX => {
+                    Opcode::PLP => self.pop_flags(),
+                    Opcode::PLX => {
                         let value = self.pop();
                         self.set_x(value);
                     }
-                    Mnemonic::PLY => {
+                    Opcode::PLY => {
                         let value = self.pop();
                         self.set_y(value);
                     }
-                    Mnemonic::RMB0 => self.rmb(0),
-                    Mnemonic::RMB1 => self.rmb(1),
-                    Mnemonic::RMB2 => self.rmb(2),
-                    Mnemonic::RMB3 => self.rmb(3),
-                    Mnemonic::RMB4 => self.rmb(4),
-                    Mnemonic::RMB5 => self.rmb(5),
-                    Mnemonic::RMB6 => self.rmb(6),
-                    Mnemonic::RMB7 => self.rmb(7),
-                    Mnemonic::ROL => {
+                    Opcode::RMB0 => self.rmb(0),
+                    Opcode::RMB1 => self.rmb(1),
+                    Opcode::RMB2 => self.rmb(2),
+                    Opcode::RMB3 => self.rmb(3),
+                    Opcode::RMB4 => self.rmb(4),
+                    Opcode::RMB5 => self.rmb(5),
+                    Opcode::RMB6 => self.rmb(6),
+                    Opcode::RMB7 => self.rmb(7),
+                    Opcode::ROL => {
                         if opcode.parameter_1 == AddressingMode::Accumulator {
                             let m = self.a;
                             self.set_a((m << 1) | self.p.carry() as u8);
@@ -232,7 +231,7 @@ impl<M: Memory> Cpu<M> {
                             self.p.set_carry((m & 0x80) != 0);
                         }
                     }
-                    Mnemonic::ROR => {
+                    Opcode::ROR => {
                         if opcode.parameter_1 == AddressingMode::Accumulator {
                             let m = self.a;
                             self.set_a((m >> 1) | ((self.p.carry() as u8) << 7));
@@ -246,67 +245,67 @@ impl<M: Memory> Cpu<M> {
                             self.p.set_carry((m & 0b1) != 0);
                         }
                     }
-                    Mnemonic::RTI => {
+                    Opcode::RTI => {
                         self.pop_flags();
                         self.pop_pc();
                     }
-                    Mnemonic::RTS => {
+                    Opcode::RTS => {
                         self.pop_pc();
                         self.pc = self.pc.wrapping_add(1);
                     }
-                    Mnemonic::SBC => {
+                    Opcode::SBC => {
                         let m = self.read_operand(opcode.parameter_1);
                         self.do_addition(!m);
                     }
-                    Mnemonic::SEC => self.p.set_carry(true),
-                    Mnemonic::SED => self.p.set_decimal_mode(true),
-                    Mnemonic::SEI => self.p.set_irqb_disable(true),
-                    Mnemonic::SMB0 => self.smb(0),
-                    Mnemonic::SMB1 => self.smb(1),
-                    Mnemonic::SMB2 => self.smb(2),
-                    Mnemonic::SMB3 => self.smb(3),
-                    Mnemonic::SMB4 => self.smb(4),
-                    Mnemonic::SMB5 => self.smb(5),
-                    Mnemonic::SMB6 => self.smb(6),
-                    Mnemonic::SMB7 => self.smb(7),
-                    Mnemonic::STA => {
+                    Opcode::SEC => self.p.set_carry(true),
+                    Opcode::SED => self.p.set_decimal_mode(true),
+                    Opcode::SEI => self.p.set_irqb_disable(true),
+                    Opcode::SMB0 => self.smb(0),
+                    Opcode::SMB1 => self.smb(1),
+                    Opcode::SMB2 => self.smb(2),
+                    Opcode::SMB3 => self.smb(3),
+                    Opcode::SMB4 => self.smb(4),
+                    Opcode::SMB5 => self.smb(5),
+                    Opcode::SMB6 => self.smb(6),
+                    Opcode::SMB7 => self.smb(7),
+                    Opcode::STA => {
                         let addr = self.read_address(opcode.parameter_1);
                         self.memory.write_u8(addr, self.a);
                     }
-                    Mnemonic::STP => return,
-                    Mnemonic::STX => {
+                    Opcode::STP => return,
+                    Opcode::STX => {
                         let addr = self.read_address(opcode.parameter_1);
                         self.memory.write_u8(addr, self.x);
                     }
-                    Mnemonic::STY => {
+                    Opcode::STY => {
                         let addr = self.read_address(opcode.parameter_1);
                         self.memory.write_u8(addr, self.y);
                     }
-                    Mnemonic::STZ => {
+                    Opcode::STZ => {
                         let addr = self.read_address(opcode.parameter_1);
                         self.memory.write_u8(addr, 0);
                     }
-                    Mnemonic::TAX => self.set_x(self.a),
-                    Mnemonic::TAY => self.set_y(self.a),
-                    Mnemonic::TRB => {
+                    Opcode::TAX => self.set_x(self.a),
+                    Opcode::TAY => self.set_y(self.a),
+                    Opcode::TRB => {
                         let addr = self.read_address(opcode.parameter_1);
                         let a = self.a;
                         let m = self.memory.read_u8(addr);
                         self.memory.write_u8(addr, m & !a);
                         self.p.set_zero((m & a) != 0);
                     }
-                    Mnemonic::TSB => {
+                    Opcode::TSB => {
                         let addr = self.read_address(opcode.parameter_1);
                         let a = self.a;
                         let m = self.memory.read_u8(addr);
                         self.memory.write_u8(addr, m | a);
                         self.p.set_zero((m & a) != 0);
                     }
-                    Mnemonic::TSX => self.set_x(self.s),
-                    Mnemonic::TXA => self.set_a(self.x),
-                    Mnemonic::TXS => self.s = self.x,
-                    Mnemonic::TYA => self.set_a(self.y),
-                    Mnemonic::WAI => todo!("WAI"),
+                    Opcode::TSX => self.set_x(self.s),
+                    Opcode::TXA => self.set_a(self.x),
+                    Opcode::TXS => self.s = self.x,
+                    Opcode::TYA => self.set_a(self.y),
+                    Opcode::WAI => todo!("WAI"),
                 }
             } else {
                 // NOP
