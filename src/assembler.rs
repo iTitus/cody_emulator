@@ -19,6 +19,8 @@ pub enum AssemblerError {
     InvalidOpcode,
     #[error("parameter mismatch")]
     ParameterMismatch,
+    #[error("jump too far")]
+    JumpTooFar,
     #[error("io error: {0}")]
     IO(#[from] std::io::Error),
 }
@@ -330,8 +332,24 @@ impl AssembledInstruction {
             match addressing_mode {
                 AddressingMode::ProgramCounterRelative => {
                     // pc + n = resolved <=> n = resolved - pc
-                    // TODO: check math
-                    *parameter = AssembledParameter::U8((resolved - address) as i8 as u8);
+                    let diff = if resolved < address {
+                        let d = address - resolved;
+                        if (0..=128).contains(&d) {
+                            // 128u16 as i8 is -128
+                            // (-128i8).wrapping_neg() is -128
+                            Ok((d as i8).wrapping_neg())
+                        } else {
+                            Err(AssemblerError::JumpTooFar)
+                        }
+                    } else {
+                        let d = resolved - address;
+                        if (0..=127).contains(&d) {
+                            Ok(d as i8)
+                        } else {
+                            Err(AssemblerError::JumpTooFar)
+                        }
+                    }?;
+                    *parameter = AssembledParameter::U8(diff as u8);
                 }
                 _ => return Err(AssemblerError::ParameterMismatch),
             }
