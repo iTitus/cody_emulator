@@ -176,6 +176,36 @@ impl AssembledInstruction {
                 }
 
                 for candidate in candidates {
+                    // special handling for BRK
+                    if candidate.opcode == Opcode::BRK
+                        && matches!(
+                            mode_1,
+                            AddressingMode::Implied
+                                | AddressingMode::Stack
+                                | AddressingMode::Immediate
+                        )
+                        && mode_2.is_none()
+                        && parameter_2.is_none()
+                    {
+                        match parameter_1 {
+                            None => {
+                                return Ok(AssembledInstruction {
+                                    instruction: candidate,
+                                    parameter_1: Some(AssembledParameter::U8(0)),
+                                    parameter_2,
+                                });
+                            }
+                            Some(AssembledParameter::U8(_)) => {
+                                return Ok(AssembledInstruction {
+                                    instruction: candidate,
+                                    parameter_1,
+                                    parameter_2,
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+
                     // TODO: better matching for not exactly fitting addressing modes
                     match (candidate.parameter_1, mode_1, candidate.parameter_2, mode_2) {
                         (p1, m1, p2, m2) if p1 == m1 && p2 == m2 => {

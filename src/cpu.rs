@@ -20,13 +20,28 @@ pub struct Status {
 
 #[derive(Debug, Default)]
 pub struct Cpu<M> {
+    /// A register
     pub a: u8,
+    /// X register
     pub x: u8,
+    /// Y register
     pub y: u8,
+    /// stack pointer
     pub s: u8,
+    /// processor status/flags
     pub p: Status,
+    /// program counter
     pub pc: u16,
+    /// memory
     pub memory: M,
+    /// software interrupt requested
+    brk: bool,
+    /// interrupt requested
+    irq: bool,
+    /// non-maskable interrupt requested
+    nmi: bool,
+    /// waiting for interrupt
+    wai: bool,
 }
 
 impl<M: Memory> Cpu<M> {
@@ -39,13 +54,63 @@ impl<M: Memory> Cpu<M> {
             p: Status::default(),
             pc: 0,
             memory,
+            brk: false,
+            irq: false,
+            nmi: false,
+            wai: false,
         };
         cpu.pc = cpu.memory.read_u16(0xFFFC);
         cpu
     }
 
+    /// Request interrupt
+    pub fn irq(&mut self) {
+        self.irq = true;
+    }
+
+    /// Request non-maskable interrupt
+    pub fn nmi(&mut self) {
+        self.nmi = true;
+    }
+
     pub fn run(&mut self) {
         loop {
+            if self.brk {
+                self.brk = false;
+                assert!(!self.wai);
+                self.push_pc();
+                self.p.set_brk_command(true);
+                self.push_flags();
+                self.p.set_irqb_disable(true);
+                self.p.set_decimal_mode(false);
+                self.pc = self.memory.read_u16(0xFFFE);
+            }
+            if self.irq {
+                self.irq = false;
+                self.wai = false;
+                if !self.p.irqb_disable() {
+                    self.push_pc();
+                    self.p.set_brk_command(false);
+                    self.push_flags();
+                    self.p.set_irqb_disable(true);
+                    self.p.set_decimal_mode(false);
+                    self.pc = self.memory.read_u16(0xFFFE);
+                }
+            }
+            if self.nmi {
+                self.nmi = false;
+                self.wai = false;
+                self.push_pc();
+                self.p.set_brk_command(false);
+                self.push_flags();
+                self.p.set_irqb_disable(true);
+                self.p.set_decimal_mode(false);
+                self.pc = self.memory.read_u16(0xFFFA);
+            }
+            if self.wai {
+                continue; // busy looping
+            }
+
             let opcode = get_instruction(self.read_u8_inc_pc());
             if let Some(opcode) = opcode {
                 match opcode.opcode {
@@ -102,15 +167,8 @@ impl<M: Memory> Cpu<M> {
                     Opcode::BPL => self.branch(!self.p.negative()),
                     Opcode::BRA => self.branch(true),
                     Opcode::BRK => {
-                        // TODO: check correctness
-                        // what happens if irqb_disable = 1?
-                        self.pc += 1;
-                        self.p.set_brk_command(true);
-                        self.push_pc();
-                        self.push_flags();
-                        self.push(self.p.into());
-                        self.p.set_decimal_mode(false); // ?
-                        self.pc = self.memory.read_u16(0xFFFE);
+                        self.pc = self.pc.wrapping_add(1); // skip unused 2nd instruction byte
+                        self.brk = true;
                     }
                     Opcode::BVC => self.branch(!self.p.overflow()),
                     Opcode::BVS => self.branch(self.p.overflow()),
@@ -157,7 +215,7 @@ impl<M: Memory> Cpu<M> {
                     }
                     Opcode::JSR => {
                         let target = self.read_address(opcode.parameter_1);
-                        self.pc = self.pc.wrapping_sub(1); // why?
+                        self.pc = self.pc.wrapping_sub(1);
                         self.push_pc();
                         self.pc = target;
                     }
@@ -193,7 +251,10 @@ impl<M: Memory> Cpu<M> {
                         self.set_a(self.a | m);
                     }
                     Opcode::PHA => self.push(self.a),
-                    Opcode::PHP => self.push_flags(),
+                    Opcode::PHP => {
+                        self.p.set_brk_command(true);
+                        self.push_flags();
+                    }
                     Opcode::PHX => self.push(self.x),
                     Opcode::PHY => self.push(self.y),
                     Opcode::PLA => {
@@ -305,7 +366,7 @@ impl<M: Memory> Cpu<M> {
                     Opcode::TXA => self.set_a(self.x),
                     Opcode::TXS => self.s = self.x,
                     Opcode::TYA => self.set_a(self.y),
-                    Opcode::WAI => todo!("WAI"),
+                    Opcode::WAI => self.wai = true,
                 }
             } else {
                 // NOP
@@ -397,15 +458,13 @@ impl<M: Memory> Cpu<M> {
     }
 
     fn push(&mut self, value: u8) {
-        let addr = 0x0100 + self.s as u16;
+        self.memory.write_u8(0x0100 + self.s as u16, value);
         self.s = self.s.wrapping_sub(1);
-        self.memory.write_u8(addr, value);
     }
 
     fn pop(&mut self) -> u8 {
         self.s = self.s.wrapping_add(1);
-        let addr = 0x0100 + self.s as u16;
-        self.memory.read_u8(addr)
+        self.memory.read_u8(0x0100 + self.s as u16)
     }
 
     fn push_pc(&mut self) {
@@ -421,12 +480,13 @@ impl<M: Memory> Cpu<M> {
     }
 
     fn pop_flags(&mut self) {
-        // TODO: find out if I and B are set
-        self.p = (self.pop() | 0x20).into();
+        // always set brk and unused flags
+        self.p = Status::from_bits(self.pop() | 0b0011_0000);
     }
 
     fn push_flags(&mut self) {
-        self.push(self.p.into());
+        // always set unused flag
+        self.push(self.p.into_bits() | 0b0010_0000);
     }
 
     fn do_addition(&mut self, m: u8) {
