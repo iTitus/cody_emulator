@@ -1,3 +1,7 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+
 pub trait Memory {
     fn read_u8(&self, address: u16) -> u8;
 
@@ -13,6 +17,26 @@ pub trait Memory {
         let [l, h] = value.to_le_bytes();
         self.write_u8(address, l);
         self.write_u8(address.wrapping_add(1), h);
+    }
+}
+
+impl<M: Memory> Memory for Rc<RefCell<M>> {
+    fn read_u8(&self, address: u16) -> u8 {
+        self.borrow().read_u8(address)
+    }
+
+    fn write_u8(&mut self, address: u16, value: u8) {
+        self.borrow_mut().write_u8(address, value);
+    }
+}
+
+impl<M: Memory> Memory for Arc<Mutex<M>> {
+    fn read_u8(&self, address: u16) -> u8 {
+        self.lock().unwrap().read_u8(address)
+    }
+
+    fn write_u8(&mut self, address: u16, value: u8) {
+        self.lock().unwrap().write_u8(address, value);
     }
 }
 
