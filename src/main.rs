@@ -3,15 +3,15 @@
 use cody_emulator::assembler::disassemble;
 use cody_emulator::cpu::Cpu;
 use cody_emulator::memory::Contiguous;
-use std::fs::File;
-use std::io::Read;
+use cody_emulator::vid;
 
 pub fn main() {
-    let mut f = File::open("codybasic.bin").unwrap();
+    vid::start();
+    /*let mut f = File::open("codybasic.bin").unwrap();
     let mut data = vec![];
     f.read_to_end(&mut data).unwrap();
     dis(&data);
-    // run(&data, 0xE000);
+    // run(&data, 0xE000);*/
 }
 
 fn dis(data: &[u8]) {

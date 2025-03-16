@@ -12,3 +12,10 @@ bitfields = "0.12"
 lazy_static = "1.5"
 strum = { version = "0.27", features = ["derive"] }
 thiserror = "2"
+
+# graphics
+bytemuck = "1.22"
+env_logger = "0.11"
+pollster = "0.4"
+wgpu = "24.0"
+winit = "0.30"
