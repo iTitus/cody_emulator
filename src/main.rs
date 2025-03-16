@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
+use cody_emulator::assembler::disassemble;
 use cody_emulator::cpu::Cpu;
+use cody_emulator::memory::Contiguous;
 use std::fs::File;
 use std::io::Read;
-use cody_emulator::assembler::disassemble;
-use cody_emulator::memory::Contiguous;
 
 pub fn main() {
     let mut f = File::open("codybasic.bin").unwrap();

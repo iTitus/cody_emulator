@@ -1,4 +1,4 @@
-use crate::opcode::{get_instructions, AddressingMode, InstructionMeta, Opcode};
+use crate::opcode::{AddressingMode, InstructionMeta, Opcode, get_instructions};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::io::{Read, Write};
@@ -139,9 +139,9 @@ impl AssembledInstruction {
                 let ((mut mode_1, mut parameter_1), mode_param_2) =
                     Self::parse_parameters(instruction)?;
                 let (mode_2, parameter_2) = if let Some((x, y)) = mode_param_2 {
-                    (Some(x), y)
+                    (x, y)
                 } else {
-                    (None, None)
+                    (AddressingMode::None, None)
                 };
 
                 // zeropage optimizations (only for parameter_1)
@@ -180,13 +180,8 @@ impl AssembledInstruction {
                 for candidate in candidates {
                     // special handling for BRK
                     if candidate.opcode == Opcode::BRK
-                        && matches!(
-                            mode_1,
-                            AddressingMode::Implied
-                                | AddressingMode::Stack
-                                | AddressingMode::Immediate
-                        )
-                        && mode_2.is_none()
+                        && matches!(mode_1, AddressingMode::None | AddressingMode::Immediate)
+                        && mode_2 == AddressingMode::None
                         && parameter_2.is_none()
                     {
                         match parameter_1 {
@@ -243,7 +238,7 @@ impl AssembledInstruction {
         AssemblerError,
     > {
         Ok(match &instruction.parameter {
-            Parameter::None => ((AddressingMode::Implied, None), None),
+            Parameter::None => ((AddressingMode::None, None), None),
             Parameter::A => ((AddressingMode::Accumulator, None), None),
             Parameter::Immediate(number) => (
                 (
@@ -366,14 +361,7 @@ impl AssembledInstruction {
             Self::fill_label(parameter_1, self.instruction.parameter_1, address, labels)?;
         }
         if let Some(parameter_2) = &mut self.parameter_2 {
-            Self::fill_label(
-                parameter_2,
-                self.instruction
-                    .parameter_2
-                    .ok_or(AssemblerError::ParameterMismatch)?,
-                address,
-                labels,
-            )?;
+            Self::fill_label(parameter_2, self.instruction.parameter_2, address, labels)?;
         }
         Ok(())
     }

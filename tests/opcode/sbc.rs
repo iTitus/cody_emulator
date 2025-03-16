@@ -1,4 +1,4 @@
-use cody_emulator::assembler::{assemble, MnemonicDSL, Parameter};
+use cody_emulator::assembler::{MnemonicDSL, Parameter, assemble};
 use cody_emulator::cpu::Cpu;
 use cody_emulator::memory::{Memory, Sparse};
 use cody_emulator::opcode::Opcode;
