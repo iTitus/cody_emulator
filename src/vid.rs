@@ -411,6 +411,9 @@ impl State {
                 }
             }
         }
+
+        // set blanking register to 1
+        memory.write_u8(0xD000, 1);
     }
 
     fn render(&mut self, memory: &Arc<Mutex<impl Memory>>) {
@@ -563,7 +566,7 @@ impl State {
             _ => 0,
         };
         if cody_code > 0 {
-            via_device.set_pressed(cody_code, pressed);
+            via_device.set_pressed(cody_code - 1, pressed);
         }
     }
 }
@@ -594,7 +597,6 @@ impl<M: Memory> ApplicationHandler for App<M> {
         let state = self.state.as_mut().unwrap();
         match event {
             WindowEvent::CloseRequested => {
-                println!("The close button was pressed; stopping");
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
@@ -621,7 +623,7 @@ impl<M: Memory> ApplicationHandler for App<M> {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
 struct Via {
     registers: [u8; 16],
     key_state: [u8; 8],
@@ -644,6 +646,15 @@ impl Via {
             self.key_state[index as usize] &= !mask;
         } else {
             self.key_state[index as usize] |= mask;
+        }
+    }
+}
+
+impl Default for Via {
+    fn default() -> Self {
+        Self {
+            registers: [0; 16],
+            key_state: [0xF8; 8],
         }
     }
 }

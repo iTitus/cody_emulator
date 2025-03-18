@@ -113,7 +113,6 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
             }
 
             let opcode = get_instruction(self.read_u8_inc_pc());
-            println!("{:#04X} {:?}", self.pc, opcode);
             if let Some(opcode) = opcode {
                 match opcode.opcode {
                     Opcode::ADC => {
