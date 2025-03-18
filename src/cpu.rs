@@ -1,3 +1,4 @@
+use crate::interrupt::InterruptProvider;
 use crate::memory::Memory;
 use crate::opcode::{AddressingMode, Opcode, get_instruction};
 use bitfields::bitfield;
@@ -19,7 +20,7 @@ pub struct Status {
 }
 
 #[derive(Debug, Default)]
-pub struct Cpu<M> {
+pub struct Cpu<M, I> {
     /// A register
     pub a: u8,
     /// X register
@@ -34,6 +35,8 @@ pub struct Cpu<M> {
     pub pc: u16,
     /// memory
     pub memory: M,
+    /// interrupt provider
+    pub interrupt_provider: I,
     /// software interrupt requested
     brk: bool,
     /// interrupt requested
@@ -44,8 +47,8 @@ pub struct Cpu<M> {
     wai: bool,
 }
 
-impl<M: Memory> Cpu<M> {
-    pub fn new(memory: M) -> Self {
+impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
+    pub fn new(memory: M, interrupt_provider: I) -> Self {
         let mut cpu = Self {
             a: 0,
             x: 0,
@@ -54,6 +57,7 @@ impl<M: Memory> Cpu<M> {
             p: Status::default(),
             pc: 0,
             memory,
+            interrupt_provider,
             brk: false,
             irq: false,
             nmi: false,
@@ -63,18 +67,15 @@ impl<M: Memory> Cpu<M> {
         cpu
     }
 
-    /// Request interrupt
-    pub fn irq(&mut self) {
-        self.irq = true;
-    }
-
-    /// Request non-maskable interrupt
-    pub fn nmi(&mut self) {
-        self.nmi = true;
-    }
-
     pub fn run(&mut self) {
         loop {
+            if self.interrupt_provider.consume_irq() {
+                self.irq = true;
+            }
+            if self.interrupt_provider.consume_nmi() {
+                self.nmi = true;
+            }
+
             if self.brk {
                 self.brk = false;
                 assert!(!self.wai);
@@ -112,6 +113,7 @@ impl<M: Memory> Cpu<M> {
             }
 
             let opcode = get_instruction(self.read_u8_inc_pc());
+            println!("{:#04X} {:?}", self.pc, opcode);
             if let Some(opcode) = opcode {
                 match opcode.opcode {
                     Opcode::ADC => {

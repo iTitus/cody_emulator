@@ -1,8 +1,16 @@
+use crate::cpu::Cpu;
+use crate::interrupt::{InterruptTrigger, SimpleInterruptProvider};
+use crate::memory::{Contiguous, Memory, MemoryDevice, OverlayMemory};
 use glam::{Mat4, Quat, Vec2, Vec3};
+use std::fs::File;
+use std::io::Read;
 use std::mem::offset_of;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::thread;
 use wgpu;
 use wgpu::util::DeviceExt;
+use winit::event::ElementState;
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -50,23 +58,23 @@ impl Color {
     const LIGHT_GREEN: Color = Color::rgb(0x80FF80);
     const LIGHT_BLUE: Color = Color::rgb(0x8080FF);
 
-    const PALETTE: [Color; 16] = [
-        Color::BLACK,
-        Color::WHITE,
-        Color::RED,
-        Color::CYAN,
-        Color::PURPLE,
-        Color::GREEN,
-        Color::BLUE,
-        Color::YELLOW,
-        Color::ORANGE,
-        Color::BROWN,
-        Color::LIGHT_RED,
-        Color::DARK_GRAY,
-        Color::GRAY,
-        Color::LIGHT_GREEN,
-        Color::LIGHT_BLUE,
-        Color::LIGHT_GRAY,
+    const PALETTE: [Self; 16] = [
+        Self::BLACK,
+        Self::WHITE,
+        Self::RED,
+        Self::CYAN,
+        Self::PURPLE,
+        Self::GREEN,
+        Self::BLUE,
+        Self::YELLOW,
+        Self::ORANGE,
+        Self::BROWN,
+        Self::LIGHT_RED,
+        Self::DARK_GRAY,
+        Self::GRAY,
+        Self::LIGHT_GREEN,
+        Self::LIGHT_BLUE,
+        Self::LIGHT_GRAY,
     ];
 
     const fn rgb(color: u32) -> Self {
@@ -127,7 +135,7 @@ struct State {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     cody_screen: wgpu::Texture,
-    raw_pixels: Box<[[Color; WIDTH as usize]; HEIGHT as usize]>,
+    raw_pixels: Box<[Color; WIDTH as usize * HEIGHT as usize]>,
     cody_screen_bind_group: wgpu::BindGroup,
     uniform: Uniform,
     uniform_buffer: wgpu::Buffer,
@@ -179,7 +187,7 @@ impl State {
             usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let raw_pixels = Box::new([[Color::default(); WIDTH as usize]; HEIGHT as usize]);
+        let raw_pixels = Box::new([Color::default(); WIDTH as usize * HEIGHT as usize]);
         let cody_screen_view = cody_screen.create_view(&wgpu::TextureViewDescriptor::default());
         let cody_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("cody sampler"),
@@ -349,17 +357,63 @@ impl State {
         self.configure_surface();
     }
 
-    fn render_pixels(&mut self) {
-        for (y, row) in self.raw_pixels.iter_mut().enumerate() {
-            for (x, pixel) in row.iter_mut().enumerate() {
-                pixel.r = ((x as f32 / WIDTH as f32) * 255.0) as u8;
-                pixel.g = 128;
-                pixel.b = ((y as f32 / WIDTH as f32) * 255.0) as u8;
+    fn render_pixels(&mut self, memory: &Arc<Mutex<impl Memory>>) {
+        let mut memory = memory.lock().unwrap();
+
+        // set blanking register to 0 because we are drawing now
+        memory.write_u8(0xD000, 0);
+
+        let control = memory.read_u8(0xD001);
+        let color = memory.read_u8(0xD002);
+
+        let border_color = Color::PALETTE[(color & 0xF) as usize];
+        self.raw_pixels.fill(border_color);
+
+        // check screen disable flag
+        if (control & 0x1) != 0 {
+            return;
+        }
+
+        let base = memory.read_u8(0xD003);
+        let _scroll = memory.read_u8(0xD004);
+        let screen_color = memory.read_u8(0xD005);
+        let _sprite = memory.read_u8(0xD006);
+
+        let color_memory_start = 0xA000u16.wrapping_add(0x400 * (color >> 4) as u16);
+        let screen_memory_start = 0xA000u16.wrapping_add(0x400 * (base >> 4) as u16);
+        let character_memory_start = 0xA000u16.wrapping_add(0x800 * (base & 0xF) as u16);
+
+        for i in 0..1000 {
+            let cx = i % 40;
+            let cy = i / 40;
+
+            let character = memory.read_u8(screen_memory_start.wrapping_add(i));
+            let local_color = memory.read_u8(color_memory_start.wrapping_add(i));
+
+            for yy in 0..8 {
+                let char_row_data =
+                    memory.read_u8(character_memory_start.wrapping_add(8 * character as u16 + yy));
+                for xx in 0..4 {
+                    let char_pixel_data = (char_row_data >> (2 * (3 - xx))) & 0x3;
+                    let palette_index = match char_pixel_data {
+                        0 => local_color & 0xF,
+                        1 => local_color >> 4,
+                        2 => screen_color & 0xF,
+                        3 => screen_color >> 4,
+                        _ => unreachable!(),
+                    };
+
+                    let pixel_pos = (cy as usize * 8 + yy as usize + BORDER_Y as usize)
+                        * WIDTH as usize
+                        + (cx as usize * 4 + xx as usize + BORDER_X as usize);
+                    let pixel = &mut self.raw_pixels[pixel_pos];
+                    *pixel = Color::PALETTE[palette_index as usize];
+                }
             }
         }
     }
 
-    fn render(&mut self) {
+    fn render(&mut self, memory: &Arc<Mutex<impl Memory>>) {
         // update uniform
         {
             const TARGET_WIDTH: u32 = 640;
@@ -400,7 +454,7 @@ impl State {
             self.uniform.transform = projection * transform;
         }
 
-        self.render_pixels();
+        self.render_pixels(memory);
 
         // Create texture view
         let surface_texture = self
@@ -472,14 +526,56 @@ impl State {
         self.window.pre_present_notify();
         surface_texture.present();
     }
+
+    fn on_keyboard_input(&self, via_device: &Arc<Mutex<Via>>, code: KeyCode, pressed: bool) {
+        let mut via_device = via_device.lock().unwrap();
+        let cody_code = match code {
+            KeyCode::KeyQ => 1,
+            KeyCode::KeyE => 2,
+            KeyCode::KeyT => 3,
+            KeyCode::KeyU => 4,
+            KeyCode::KeyO => 5,
+            KeyCode::KeyA => 6,
+            KeyCode::KeyD => 7,
+            KeyCode::KeyG => 8,
+            KeyCode::KeyJ => 9,
+            KeyCode::KeyL => 10,
+            KeyCode::ShiftLeft | KeyCode::ShiftRight => 11, // cody modifier (makes numbers)
+            KeyCode::KeyX => 12,
+            KeyCode::KeyV => 13,
+            KeyCode::KeyN => 14,
+            KeyCode::ControlLeft | KeyCode::ControlRight => 15, // meta modifier (makes punctuation)
+            KeyCode::KeyZ => 16,
+            KeyCode::KeyC => 17,
+            KeyCode::KeyB => 18,
+            KeyCode::KeyM => 19,
+            KeyCode::Enter => 20, // arrow key
+            KeyCode::KeyS => 21,
+            KeyCode::KeyF => 22,
+            KeyCode::KeyH => 23,
+            KeyCode::KeyK => 24,
+            KeyCode::Space => 25,
+            KeyCode::KeyW => 26,
+            KeyCode::KeyR => 27,
+            KeyCode::KeyY => 28,
+            KeyCode::KeyI => 29,
+            KeyCode::KeyP => 30,
+            _ => 0,
+        };
+        if cody_code > 0 {
+            via_device.set_pressed(cody_code, pressed);
+        }
+    }
 }
 
 #[derive(Default)]
-struct App {
+struct App<M> {
     state: Option<State>,
+    memory: Arc<Mutex<M>>,
+    via_device: Arc<Mutex<Via>>,
 }
 
-impl ApplicationHandler for App {
+impl<M: Memory> ApplicationHandler for App<M> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // Create window object
         let window = Arc::new(
@@ -504,14 +600,70 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 // Emits a new redraw requested event.
                 state.get_window().request_redraw();
-                state.render();
+                state.render(&self.memory);
             }
             WindowEvent::Resized(size) => {
                 // Reconfigures the size of the surface. We do not re-render
                 // here as this event is always followed up by redraw request.
                 state.resize(size);
             }
-            _ => (),
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    state.on_keyboard_input(
+                        &self.via_device,
+                        code,
+                        event.state == ElementState::Pressed,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default)]
+struct Via {
+    registers: [u8; 16],
+    key_state: [u8; 8],
+}
+
+impl Via {
+    fn read_iora(&mut self) -> u8 {
+        let ddr = self.registers[3];
+        let ior = self.registers[1];
+        assert_eq!(ddr, 0x7);
+        let output = ior & ddr;
+        self.key_state[output as usize] | output
+    }
+
+    fn set_pressed(&mut self, code: u8, pressed: bool) {
+        let bit = (code % 5) + 3;
+        let index = code / 5;
+        let mask = 1 << bit;
+        if pressed {
+            self.key_state[index as usize] &= !mask;
+        } else {
+            self.key_state[index as usize] |= mask;
+        }
+    }
+}
+
+impl MemoryDevice for Via {
+    fn read(&mut self, address: u16) -> Option<u8> {
+        match address {
+            0x9F01 => Some(self.read_iora()),
+            0x9F00..=0x9F0F => Some(self.registers[(address - 0x9F00) as usize]),
+            _ => None,
+        }
+    }
+
+    fn write(&mut self, address: u16, value: u8) -> Option<()> {
+        match address {
+            0x9F00..=0x9F0F => {
+                self.registers[(address - 0x9F00) as usize] = value;
+                Some(())
+            }
+            _ => None,
         }
     }
 }
@@ -522,6 +674,30 @@ pub fn start() {
     // To change the log level, set the `RUST_LOG` environment variable. See the `env_logger`
     // documentation for more information.
     env_logger::init();
+
+    let mut f = File::open("codybasic.bin").unwrap();
+    let mut data = vec![];
+    f.read_to_end(&mut data).unwrap();
+    let memory = Arc::new(Mutex::new(OverlayMemory::from_memory(
+        Contiguous::from_bytes_at(&data, 0xE000),
+    )));
+    let via_device = Arc::new(Mutex::new(Via::default()));
+    memory.lock().unwrap().add_overlay(Arc::clone(&via_device));
+
+    let interrupt_provider = Arc::new(Mutex::new(SimpleInterruptProvider::default()));
+    let mut cpu = Cpu::new(Arc::clone(&memory), Arc::clone(&interrupt_provider));
+    thread::spawn(move || {
+        cpu.run();
+    });
+
+    // TODO: make this use the VIA registers for configuration
+    let mut interrupt_trigger = Arc::clone(&interrupt_provider);
+    thread::spawn(move || {
+        loop {
+            thread::sleep(std::time::Duration::from_secs_f64(1.0 / 60.0));
+            interrupt_trigger.trigger_irq();
+        }
+    });
 
     let event_loop = EventLoop::new().unwrap();
 
@@ -537,6 +713,10 @@ pub fn start() {
     // the background.
     // event_loop.set_control_flow(ControlFlow::Wait);
 
-    let mut app = App::default();
+    let mut app = App {
+        state: None,
+        memory,
+        via_device,
+    };
     event_loop.run_app(&mut app).unwrap();
 }

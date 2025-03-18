@@ -3,9 +3,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 pub trait Memory {
-    fn read_u8(&self, address: u16) -> u8;
+    fn read_u8(&mut self, address: u16) -> u8;
 
-    fn read_u16(&self, address: u16) -> u16 {
+    fn read_u16(&mut self, address: u16) -> u16 {
         let l = self.read_u8(address);
         let h = self.read_u8(address.wrapping_add(1));
         u16::from_le_bytes([l, h])
@@ -21,8 +21,8 @@ pub trait Memory {
 }
 
 impl<M: Memory> Memory for Rc<RefCell<M>> {
-    fn read_u8(&self, address: u16) -> u8 {
-        self.borrow().read_u8(address)
+    fn read_u8(&mut self, address: u16) -> u8 {
+        self.borrow_mut().read_u8(address)
     }
 
     fn write_u8(&mut self, address: u16, value: u8) {
@@ -31,7 +31,7 @@ impl<M: Memory> Memory for Rc<RefCell<M>> {
 }
 
 impl<M: Memory> Memory for Arc<Mutex<M>> {
-    fn read_u8(&self, address: u16) -> u8 {
+    fn read_u8(&mut self, address: u16) -> u8 {
         self.lock().unwrap().read_u8(address)
     }
 
@@ -49,7 +49,7 @@ impl Default for Contiguous {
 }
 
 impl Memory for Contiguous {
-    fn read_u8(&self, address: u16) -> u8 {
+    fn read_u8(&mut self, address: u16) -> u8 {
         self.0[address as usize]
     }
 
@@ -91,7 +91,7 @@ impl Default for Sparse {
 }
 
 impl Memory for Sparse {
-    fn read_u8(&self, address: u16) -> u8 {
+    fn read_u8(&mut self, address: u16) -> u8 {
         match address {
             0x0000..0x0100 => self.zeropage[(address & 0xFF) as usize],
             0x0100..0x0200 => self.stack[(address & 0xFF) as usize],
@@ -130,5 +130,69 @@ impl Sparse {
         };
         m.write_u16(0xFFFC, 0x0200);
         m
+    }
+}
+
+pub trait MemoryDevice {
+    fn read(&mut self, address: u16) -> Option<u8>;
+    fn write(&mut self, address: u16, value: u8) -> Option<()>;
+}
+
+impl<M: MemoryDevice> MemoryDevice for Rc<RefCell<M>> {
+    fn read(&mut self, address: u16) -> Option<u8> {
+        self.borrow_mut().read(address)
+    }
+
+    fn write(&mut self, address: u16, value: u8) -> Option<()> {
+        self.borrow_mut().write(address, value)
+    }
+}
+
+impl<M: MemoryDevice> MemoryDevice for Arc<Mutex<M>> {
+    fn read(&mut self, address: u16) -> Option<u8> {
+        self.lock().unwrap().read(address)
+    }
+
+    fn write(&mut self, address: u16, value: u8) -> Option<()> {
+        self.lock().unwrap().write(address, value)
+    }
+}
+
+#[derive(Default)]
+pub struct OverlayMemory<M> {
+    base: M,
+    overlays: Vec<Box<dyn MemoryDevice + Send>>,
+}
+
+impl<M: Memory> OverlayMemory<M> {
+    pub fn from_memory(memory: M) -> Self {
+        Self {
+            base: memory,
+            overlays: vec![],
+        }
+    }
+
+    pub fn add_overlay<MH: MemoryDevice + Send + 'static>(&mut self, handler: MH) {
+        self.overlays.push(Box::new(handler));
+    }
+}
+
+impl<M: Memory> Memory for OverlayMemory<M> {
+    fn read_u8(&mut self, address: u16) -> u8 {
+        for overlay in &mut self.overlays {
+            if let Some(value) = overlay.read(address) {
+                return value;
+            }
+        }
+        self.base.read_u8(address)
+    }
+
+    fn write_u8(&mut self, address: u16, value: u8) {
+        for overlay in &mut self.overlays {
+            if overlay.write(address, value).is_some() {
+                return;
+            }
+        }
+        self.base.write_u8(address, value);
     }
 }
