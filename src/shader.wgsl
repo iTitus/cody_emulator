@@ -1,5 +1,11 @@
+struct Uniform {
+    transform: mat4x4<f32>,
+};
+@group(1) @binding(0)
+var<uniform> u: Uniform;
+
 struct VertexInput {
-    @location(0) pos: vec3<f32>,
+    @location(0) pos: vec2<f32>,
     @location(1) tex: vec2<f32>,
 };
 
@@ -11,7 +17,7 @@ struct VertexOutput {
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    out.clip_position = vec4<f32>(in.pos, 1.0);
+    out.clip_position = u.transform * vec4<f32>(in.pos, 0.0, 1.0);
     out.tex = in.tex;
     return out;
 }

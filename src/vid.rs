@@ -1,3 +1,4 @@
+use glam::{Mat4, Quat, Vec2, Vec3};
 use std::mem::offset_of;
 use std::sync::Arc;
 use wgpu;
@@ -9,32 +10,98 @@ use winit::{
     window::{Window, WindowId},
 };
 
-const WIDTH: u32 = 160;
-const HEIGHT: u32 = 200;
+const CONTENT_WIDTH: u32 = 160;
+const CONTENT_HEIGHT: u32 = 200;
+const BORDER_X: u32 = 4;
+const BORDER_Y: u32 = 8;
+const WIDTH: u32 = CONTENT_WIDTH + 2 * BORDER_X;
+const HEIGHT: u32 = CONTENT_HEIGHT + 2 * BORDER_Y;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct Color {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+impl Default for Color {
+    fn default() -> Self {
+        Color::BLACK
+    }
+}
+
+impl Color {
+    const BLACK: Color = Color::rgb(0x000000);
+    const WHITE: Color = Color::rgb(0xFFFFFF);
+    const RED: Color = Color::rgb(0xFF0000);
+    const GREEN: Color = Color::rgb(0x00FF00);
+    const BLUE: Color = Color::rgb(0x0000FF);
+    const YELLOW: Color = Color::rgb(0xFFFF00);
+    const PURPLE: Color = Color::rgb(0xFF00FF);
+    const CYAN: Color = Color::rgb(0x00FFFF);
+    const ORANGE: Color = Color::rgb(0xFF8000);
+    const BROWN: Color = Color::rgb(0xAA5555);
+    const GRAY: Color = Color::rgb(0x808080);
+    const LIGHT_GRAY: Color = Color::rgb(0xC0C0C0);
+    const DARK_GRAY: Color = Color::rgb(0x404040);
+    const LIGHT_RED: Color = Color::rgb(0xFF8080);
+    const LIGHT_GREEN: Color = Color::rgb(0x80FF80);
+    const LIGHT_BLUE: Color = Color::rgb(0x8080FF);
+
+    const PALETTE: [Color; 16] = [
+        Color::BLACK,
+        Color::WHITE,
+        Color::RED,
+        Color::CYAN,
+        Color::PURPLE,
+        Color::GREEN,
+        Color::BLUE,
+        Color::YELLOW,
+        Color::ORANGE,
+        Color::BROWN,
+        Color::LIGHT_RED,
+        Color::DARK_GRAY,
+        Color::GRAY,
+        Color::LIGHT_GREEN,
+        Color::LIGHT_BLUE,
+        Color::LIGHT_GRAY,
+    ];
+
+    const fn rgb(color: u32) -> Self {
+        Self {
+            r: ((color >> 16) & 0xFF) as u8,
+            g: ((color >> 8) & 0xFF) as u8,
+            b: (color & 0xFF) as u8,
+            a: 255,
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
-    pos: [f32; 3],
-    tex: [f32; 2],
+    pos: Vec2,
+    tex: Vec2,
 }
 
 const VERTICES: &[Vertex] = &[
     Vertex {
-        pos: [-0.5, -0.5, 0.0],
-        tex: [0.0, 1.0],
+        pos: Vec2::new(0.0, 0.0),
+        tex: Vec2::new(0.0, 1.0),
     }, // bottom left
     Vertex {
-        pos: [0.5, -0.5, 0.0],
-        tex: [1.0, 1.0],
+        pos: Vec2::new(1.0, 0.0),
+        tex: Vec2::new(1.0, 1.0),
     }, // bottom right
     Vertex {
-        pos: [0.5, 0.5, 0.0],
-        tex: [1.0, 0.0],
+        pos: Vec2::new(1.0, 1.0),
+        tex: Vec2::new(1.0, 0.0),
     }, // top right
     Vertex {
-        pos: [-0.5, 0.5, 0.0],
-        tex: [0.0, 0.0],
+        pos: Vec2::new(0.0, 1.0),
+        tex: Vec2::new(0.0, 0.0),
     }, // top left
 ];
 
@@ -42,6 +109,12 @@ const INDICES: &[u16] = &[
     0, 1, 2, // first triangle
     0, 2, 3, // second triangle
 ];
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct Uniform {
+    transform: Mat4,
+}
 
 struct State {
     window: Arc<Window>,
@@ -54,8 +127,11 @@ struct State {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     cody_screen: wgpu::Texture,
-    raw_pixels: Vec<u8>,
+    raw_pixels: Box<[[Color; WIDTH as usize]; HEIGHT as usize]>,
     cody_screen_bind_group: wgpu::BindGroup,
+    uniform: Uniform,
+    uniform_buffer: wgpu::Buffer,
+    uniform_bind_group: wgpu::BindGroup,
 }
 
 impl State {
@@ -103,7 +179,7 @@ impl State {
             usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let raw_pixels = vec![0; WIDTH as usize * HEIGHT as usize * 4];
+        let raw_pixels = Box::new([[Color::default(); WIDTH as usize]; HEIGHT as usize]);
         let cody_screen_view = cody_screen.create_view(&wgpu::TextureViewDescriptor::default());
         let cody_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("cody sampler"),
@@ -152,9 +228,38 @@ impl State {
             ],
         });
 
+        let uniform = Uniform::default();
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let uniform_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("uniform bind group layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("uniform bind group"),
+            layout: &uniform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pipeline layout"),
-            bind_group_layouts: &[&cody_screen_bind_group_layout],
+            bind_group_layouts: &[&cody_screen_bind_group_layout, &uniform_bind_group_layout],
             push_constant_ranges: &[],
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -169,7 +274,7 @@ impl State {
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[
                         wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x3,
+                            format: wgpu::VertexFormat::Float32x2,
                             offset: offset_of!(Vertex, pos) as wgpu::BufferAddress,
                             shader_location: 0,
                         },
@@ -207,6 +312,9 @@ impl State {
             cody_screen,
             raw_pixels,
             cody_screen_bind_group,
+            uniform,
+            uniform_buffer,
+            uniform_bind_group,
         };
 
         // Configure surface for the first time
@@ -242,20 +350,56 @@ impl State {
     }
 
     fn render_pixels(&mut self) {
-        for y in 0..HEIGHT {
-            for x in 0..WIDTH {
-                let linear_pos = (y as usize * WIDTH as usize + x as usize) * 4;
-                let pixel = &mut self.raw_pixels[linear_pos..linear_pos + 4];
-                let r = ((x as f32 / WIDTH as f32) * 255.0) as u8;
-                let g = 128;
-                let b = ((y as f32 / HEIGHT as f32) * 255.0) as u8;
-                let a = 255;
-                pixel.copy_from_slice(&[r, g, b, a]);
+        for (y, row) in self.raw_pixels.iter_mut().enumerate() {
+            for (x, pixel) in row.iter_mut().enumerate() {
+                pixel.r = ((x as f32 / WIDTH as f32) * 255.0) as u8;
+                pixel.g = 128;
+                pixel.b = ((y as f32 / WIDTH as f32) * 255.0) as u8;
             }
         }
     }
 
     fn render(&mut self) {
+        // update uniform
+        {
+            const TARGET_WIDTH: u32 = 640;
+            const TARGET_HEIGHT: u32 = 480;
+
+            let size = self.window.inner_size();
+            let w = if size.width > 0 {
+                size.width as f32
+            } else {
+                1.0
+            };
+            let h = if size.height > 0 {
+                size.height as f32
+            } else {
+                1.0
+            };
+
+            let width_scale = w / TARGET_WIDTH as f32;
+            let height_scale = h / TARGET_HEIGHT as f32;
+            let (scale, offset_x, offset_y) = if width_scale <= height_scale {
+                let height = width_scale * TARGET_HEIGHT as f32;
+                (width_scale, 0.0, (h - height) / 2.0)
+            } else {
+                let width = height_scale * TARGET_WIDTH as f32;
+                (height_scale, (w - width) / 2.0, 0.0)
+            };
+
+            let projection = Mat4::orthographic_rh(0.0, w, 0.0, h, 0.0, 1.0);
+            let transform = Mat4::from_scale_rotation_translation(
+                Vec3::new(
+                    TARGET_WIDTH as f32 * scale,
+                    TARGET_HEIGHT as f32 * scale,
+                    1.0,
+                ),
+                Quat::IDENTITY,
+                Vec3::new(offset_x, offset_y, 0.0),
+            );
+            self.uniform.transform = projection * transform;
+        }
+
         self.render_pixels();
 
         // Create texture view
@@ -275,7 +419,7 @@ impl State {
         // upload raw pixel data
         self.queue.write_texture(
             self.cody_screen.as_image_copy(),
-            &self.raw_pixels,
+            bytemuck::cast_slice(&*self.raw_pixels),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(WIDTH * 4),
@@ -288,6 +432,13 @@ impl State {
             },
         );
 
+        // upload uniform data
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[self.uniform]),
+        );
+
         // Renders a GREEN screen
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
@@ -298,7 +449,7 @@ impl State {
                     view: &texture_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -310,6 +461,7 @@ impl State {
             // If you wanted to call any drawing commands, they would go here.
             renderpass.set_pipeline(&self.pipeline);
             renderpass.set_bind_group(0, &self.cody_screen_bind_group, &[]);
+            renderpass.set_bind_group(1, &self.uniform_bind_group, &[]);
             renderpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             renderpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             renderpass.draw_indexed(0..INDICES.len() as u32, 0, 0..1);
@@ -350,9 +502,9 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                state.render();
                 // Emits a new redraw requested event.
                 state.get_window().request_redraw();
+                state.render();
             }
             WindowEvent::Resized(size) => {
                 // Reconfigures the size of the surface. We do not re-render
