@@ -1,5 +1,4 @@
-use std::cell::RefCell;
-use std::rc::Rc;
+use crate::device::MemoryDevice;
 use std::sync::{Arc, Mutex};
 
 pub trait Memory {
@@ -17,16 +16,6 @@ pub trait Memory {
         let [l, h] = value.to_le_bytes();
         self.write_u8(address, l);
         self.write_u8(address.wrapping_add(1), h);
-    }
-}
-
-impl<M: Memory> Memory for Rc<RefCell<M>> {
-    fn read_u8(&mut self, address: u16) -> u8 {
-        self.borrow_mut().read_u8(address)
-    }
-
-    fn write_u8(&mut self, address: u16, value: u8) {
-        self.borrow_mut().write_u8(address, value);
     }
 }
 
@@ -133,54 +122,29 @@ impl Sparse {
     }
 }
 
-pub trait MemoryDevice {
-    fn read(&mut self, address: u16) -> Option<u8>;
-    fn write(&mut self, address: u16, value: u8) -> Option<()>;
-}
-
-impl<M: MemoryDevice> MemoryDevice for Rc<RefCell<M>> {
-    fn read(&mut self, address: u16) -> Option<u8> {
-        self.borrow_mut().read(address)
-    }
-
-    fn write(&mut self, address: u16, value: u8) -> Option<()> {
-        self.borrow_mut().write(address, value)
-    }
-}
-
-impl<M: MemoryDevice> MemoryDevice for Arc<Mutex<M>> {
-    fn read(&mut self, address: u16) -> Option<u8> {
-        self.lock().unwrap().read(address)
-    }
-
-    fn write(&mut self, address: u16, value: u8) -> Option<()> {
-        self.lock().unwrap().write(address, value)
-    }
-}
-
 #[derive(Default)]
-pub struct OverlayMemory<M> {
+pub struct MappedMemory<M> {
     base: M,
-    overlays: Vec<Box<dyn MemoryDevice + Send>>,
+    devices: Vec<Box<dyn MemoryDevice + Send>>,
 }
 
-impl<M: Memory> OverlayMemory<M> {
+impl<M: Memory> MappedMemory<M> {
     pub fn from_memory(memory: M) -> Self {
         Self {
             base: memory,
-            overlays: vec![],
+            devices: vec![],
         }
     }
 
-    pub fn add_overlay<MH: MemoryDevice + Send + 'static>(&mut self, handler: MH) {
-        self.overlays.push(Box::new(handler));
+    pub fn add_device<MH: MemoryDevice + Send + 'static>(&mut self, handler: MH) {
+        self.devices.push(Box::new(handler));
     }
 }
 
-impl<M: Memory> Memory for OverlayMemory<M> {
+impl<M: Memory> Memory for MappedMemory<M> {
     fn read_u8(&mut self, address: u16) -> u8 {
-        for overlay in &mut self.overlays {
-            if let Some(value) = overlay.read(address) {
+        for device in &mut self.devices {
+            if let Some(value) = device.read(address) {
                 return value;
             }
         }
@@ -188,8 +152,8 @@ impl<M: Memory> Memory for OverlayMemory<M> {
     }
 
     fn write_u8(&mut self, address: u16, value: u8) {
-        for overlay in &mut self.overlays {
-            if overlay.write(address, value).is_some() {
+        for device in &mut self.devices {
+            if device.write(address, value).is_some() {
                 return;
             }
         }

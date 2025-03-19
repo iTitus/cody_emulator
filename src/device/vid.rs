@@ -1,6 +1,7 @@
 use crate::cpu::Cpu;
+use crate::device::via::Via;
 use crate::interrupt::{InterruptTrigger, SimpleInterruptProvider};
-use crate::memory::{Contiguous, Memory, MemoryDevice, OverlayMemory};
+use crate::memory::{Contiguous, MappedMemory, Memory};
 use glam::{Mat4, Quat, Vec2, Vec3};
 use std::fs::File;
 use std::io::Read;
@@ -623,62 +624,6 @@ impl<M: Memory> ApplicationHandler for App<M> {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-struct Via {
-    registers: [u8; 16],
-    key_state: [u8; 8],
-}
-
-impl Via {
-    fn read_iora(&mut self) -> u8 {
-        let ddr = self.registers[3];
-        let ior = self.registers[1];
-        assert_eq!(ddr, 0x7);
-        let output = ior & ddr;
-        self.key_state[output as usize] | output
-    }
-
-    fn set_pressed(&mut self, code: u8, pressed: bool) {
-        let bit = (code % 5) + 3;
-        let index = code / 5;
-        let mask = 1 << bit;
-        if pressed {
-            self.key_state[index as usize] &= !mask;
-        } else {
-            self.key_state[index as usize] |= mask;
-        }
-    }
-}
-
-impl Default for Via {
-    fn default() -> Self {
-        Self {
-            registers: [0; 16],
-            key_state: [0xF8; 8],
-        }
-    }
-}
-
-impl MemoryDevice for Via {
-    fn read(&mut self, address: u16) -> Option<u8> {
-        match address {
-            0x9F01 => Some(self.read_iora()),
-            0x9F00..=0x9F0F => Some(self.registers[(address - 0x9F00) as usize]),
-            _ => None,
-        }
-    }
-
-    fn write(&mut self, address: u16, value: u8) -> Option<()> {
-        match address {
-            0x9F00..=0x9F0F => {
-                self.registers[(address - 0x9F00) as usize] = value;
-                Some(())
-            }
-            _ => None,
-        }
-    }
-}
-
 pub fn start() {
     // wgpu uses `log` for all of our logging, so we initialize a logger with the `env_logger` crate.
     //
@@ -689,11 +634,11 @@ pub fn start() {
     let mut f = File::open("codybasic.bin").unwrap();
     let mut data = vec![];
     f.read_to_end(&mut data).unwrap();
-    let memory = Arc::new(Mutex::new(OverlayMemory::from_memory(
+    let memory = Arc::new(Mutex::new(MappedMemory::from_memory(
         Contiguous::from_bytes_at(&data, 0xE000),
     )));
     let via_device = Arc::new(Mutex::new(Via::default()));
-    memory.lock().unwrap().add_overlay(Arc::clone(&via_device));
+    memory.lock().unwrap().add_device(Arc::clone(&via_device));
 
     let interrupt_provider = Arc::new(Mutex::new(SimpleInterruptProvider::default()));
     let mut cpu = Cpu::new(Arc::clone(&memory), Arc::clone(&interrupt_provider));

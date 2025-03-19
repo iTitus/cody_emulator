@@ -1,5 +1,5 @@
 use cody_emulator::assembler::disassemble;
-use cody_emulator::vid;
+use cody_emulator::device::vid;
 
 pub fn main() {
     vid::start();

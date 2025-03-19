@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 pub trait InterruptProvider {
@@ -12,16 +10,6 @@ pub trait InterruptTrigger {
     fn trigger_nmi(&mut self);
 }
 
-impl<IP: InterruptProvider> InterruptProvider for Rc<RefCell<IP>> {
-    fn consume_irq(&mut self) -> bool {
-        self.borrow_mut().consume_irq()
-    }
-
-    fn consume_nmi(&mut self) -> bool {
-        self.borrow_mut().consume_nmi()
-    }
-}
-
 impl<IP: InterruptProvider> InterruptProvider for Arc<Mutex<IP>> {
     fn consume_irq(&mut self) -> bool {
         self.lock().unwrap().consume_irq()
@@ -29,16 +17,6 @@ impl<IP: InterruptProvider> InterruptProvider for Arc<Mutex<IP>> {
 
     fn consume_nmi(&mut self) -> bool {
         self.lock().unwrap().consume_nmi()
-    }
-}
-
-impl<IP: InterruptTrigger> InterruptTrigger for Rc<RefCell<IP>> {
-    fn trigger_irq(&mut self) {
-        self.borrow_mut().trigger_irq();
-    }
-
-    fn trigger_nmi(&mut self) {
-        self.borrow_mut().trigger_nmi();
     }
 }
 
