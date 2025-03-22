@@ -584,7 +584,7 @@ impl<M: Memory> ApplicationHandler for App<M> {
         // Create window object
         let window = Arc::new(
             event_loop
-                .create_window(Window::default_attributes())
+                .create_window(Window::default_attributes().with_title("Cody"))
                 .unwrap(),
         );
 
