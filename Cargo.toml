@@ -14,7 +14,7 @@ strum = { version = "0.27", features = ["derive"] }
 thiserror = "2"
 
 # graphics
-bytemuck = "1.22"
+bytemuck = { version = "1.22", features = ["latest_stable_rust"] }
 glam = { version = "0.30", features = ["bytemuck"] }
 env_logger = "0.11"
 pollster = "0.4"
