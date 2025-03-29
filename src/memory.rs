@@ -33,7 +33,8 @@ pub struct Contiguous(pub [u8; 0x10000]);
 
 impl Default for Contiguous {
     fn default() -> Self {
-        Self([0; 0x10000])
+        // TODO: does this stop stack overflows?
+        Self(vec![0; 0x10000].try_into().unwrap())
     }
 }
 
@@ -48,12 +49,12 @@ impl Memory for Contiguous {
 }
 
 impl Contiguous {
-    /// Create memory with data placed at 0.
+    /// Create memory with `data` placed at 0.
     pub fn from_bytes(data: &[u8]) -> Self {
         Self::from_bytes_at(data, 0)
     }
 
-    /// Create memory with data placed at load_address.
+    /// Create memory with `data` placed at `load_address`.
     pub fn from_bytes_at(data: &[u8], load_address: u16) -> Self {
         let mut memory = Self::default();
         memory.0[load_address as usize..].copy_from_slice(data);

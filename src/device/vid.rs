@@ -188,7 +188,9 @@ impl State {
             usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let raw_pixels = Box::new([Color::default(); WIDTH as usize * HEIGHT as usize]);
+        let raw_pixels = vec![Color::default(); WIDTH as usize * HEIGHT as usize]
+            .try_into()
+            .unwrap();
         let cody_screen_view = cody_screen.create_view(&wgpu::TextureViewDescriptor::default());
         let cody_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("cody sampler"),
@@ -277,7 +279,7 @@ impl State {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
@@ -295,13 +297,13 @@ impl State {
                     ],
                 }],
             },
-            primitive: Default::default(),
+            primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(surface_format.into())],
             }),
             multiview: None,
@@ -498,7 +500,9 @@ impl State {
         );
 
         // Renders a GREEN screen
-        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
             // Create the renderpass which will clear the screen.
             let mut renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

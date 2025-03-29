@@ -322,7 +322,7 @@ impl AssembledInstruction {
             let resolved = labels
                 .get(label)
                 .copied()
-                .ok_or_else(|| AssemblerError::UnknownLabel(label.to_string()))?;
+                .ok_or_else(|| AssemblerError::UnknownLabel((*label).to_string()))?;
             // TODO: more addressing modes for labels
             match addressing_mode {
                 AddressingMode::ProgramCounterRelative => {
@@ -425,7 +425,7 @@ impl Assembly {
                 match p {
                     AssembledParameter::U8(number) => w.write_all(&[*number])?,
                     AssembledParameter::U16(number) => w.write_all(&number.to_le_bytes())?,
-                    _ => unreachable!(),
+                    AssembledParameter::Label(_) => unreachable!(),
                 }
             }
         }
