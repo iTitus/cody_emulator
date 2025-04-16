@@ -159,9 +159,11 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
                     Opcode::BIT => {
                         let m = self.read_operand(opcode.parameter_1);
                         self.p.set_zero((self.a & m) == 0);
-                        // TODO: some sources say this does not happen with immediate operand
-                        self.p.set_negative((m & 0x80) != 0);
-                        self.p.set_carry((m & 0x40) != 0);
+                        if opcode.parameter_1 != AddressingMode::Immediate {
+                            // N and V are only touched when not in immediate mode
+                            self.p.set_negative((m & 0x80) != 0);
+                            self.p.set_overflow((m & 0x40) != 0);
+                        }
                     }
                     Opcode::BMI => self.branch(self.p.negative()),
                     Opcode::BNE => self.branch(!self.p.zero()),
