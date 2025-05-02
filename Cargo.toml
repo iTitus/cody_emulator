@@ -8,7 +8,7 @@ repository = "https://github.com/iTitus/cody_emulator"
 license = "MIT"
 
 [dependencies]
-bitfields = "0.12"
+bitfields = "0.13"
 lazy_static = "1.5"
 strum = { version = "0.27", features = ["derive"] }
 thiserror = "2"
