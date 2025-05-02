@@ -6,6 +6,7 @@ use glam::{Mat4, Quat, Vec2, Vec3};
 use std::fs::File;
 use std::io::Read;
 use std::mem::offset_of;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use wgpu;
@@ -628,14 +629,14 @@ impl<M: Memory> ApplicationHandler for App<M> {
     }
 }
 
-pub fn start() {
+pub fn start(path: impl AsRef<Path>) {
     // wgpu uses `log` for all of our logging, so we initialize a logger with the `env_logger` crate.
     //
     // To change the log level, set the `RUST_LOG` environment variable. See the `env_logger`
     // documentation for more information.
     env_logger::init();
 
-    let mut f = File::open("codybasic.bin").unwrap();
+    let mut f = File::open(path).unwrap();
     let mut data = vec![];
     f.read_to_end(&mut data).unwrap();
     let memory = Arc::new(Mutex::new(MappedMemory::from_memory(
