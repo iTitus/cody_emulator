@@ -1,4 +1,5 @@
 use crate::opcode::{AddressingMode, InstructionMeta, Opcode, get_instructions};
+use itertools::Itertools;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::io::{Read, Write};
@@ -17,8 +18,8 @@ pub enum AssemblerError {
     AddressOverflow,
     #[error("invalid opcode")]
     InvalidOpcode,
-    #[error("parameter mismatch")]
-    ParameterMismatch,
+    #[error("parameter mismatch: {0}")]
+    ParameterMismatch(String),
     #[error("jump too far")]
     JumpTooFar,
     #[error("io error: {0}")]
@@ -26,7 +27,11 @@ pub enum AssemblerError {
 }
 
 pub trait MnemonicDSL: Sized {
-    fn labelled(self, label: impl Into<String>, parameter: Parameter) -> Instruction;
+    fn labelled(self, label: impl Into<String>) -> Instruction {
+        self.labelled_with(label, Parameter::None)
+    }
+
+    fn labelled_with(self, label: impl Into<String>, parameter: Parameter) -> Instruction;
 
     fn with(self, parameter: Parameter) -> Instruction;
 
@@ -42,7 +47,7 @@ pub enum Mnemonic {
 }
 
 impl<T: Into<Mnemonic>> MnemonicDSL for T {
-    fn labelled(self, label: impl Into<String>, parameter: Parameter) -> Instruction {
+    fn labelled_with(self, label: impl Into<String>, parameter: Parameter) -> Instruction {
         Instruction {
             label: Some(label.into()),
             mnemonic: self.into(),
@@ -95,6 +100,16 @@ pub enum Parameter {
     Indirect(Box<Parameter>),
     #[strum(to_string = "{0:?}")]
     List(Vec<Parameter>),
+}
+
+impl Parameter {
+    pub fn label(label: impl Into<String>) -> Self {
+        Self::Label(label.into())
+    }
+
+    pub fn list(parameters: impl Into<Vec<Parameter>>) -> Self {
+        Self::List(parameters.into())
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -177,6 +192,25 @@ impl AssembledInstruction {
                     }
                 }
 
+                // special handling for labels
+                if matches!(parameter_1, Some(AssembledParameter::Label(_)))
+                    || matches!(parameter_2, Some(AssembledParameter::Label(_)))
+                {
+                    // only works when there is one possible opcode
+                    // TODO: implement selection between relative and absolute
+                    let candidate = candidates.iter().exactly_one().map_err(|_| {
+                        AssemblerError::ParameterMismatch(format!(
+                            "multiple candidates for labelled instruction {:?}",
+                            instruction.mnemonic
+                        ))
+                    })?;
+                    return Ok(AssembledInstruction {
+                        instruction: candidate,
+                        parameter_1,
+                        parameter_2,
+                    });
+                }
+
                 for candidate in candidates {
                     // special handling for BRK
                     if candidate.opcode == Opcode::BRK
@@ -216,7 +250,10 @@ impl AssembledInstruction {
                     }
                 }
 
-                Err(AssemblerError::ParameterMismatch)
+                Err(AssemblerError::ParameterMismatch(format!(
+                    "could not find matching instruction for {:?}",
+                    instruction.mnemonic
+                )))
             }
             Mnemonic::PseudoOp(pseudo) => match pseudo {
                 PseudoInstruction::BBR => todo!(),
@@ -256,7 +293,7 @@ impl AssembledInstruction {
             ),
             Parameter::Label(label) => (
                 (
-                    AddressingMode::Accumulator,
+                    AddressingMode::None, // placeholder
                     Some(AssembledParameter::Label(label.to_string())),
                 ),
                 None,
@@ -277,9 +314,26 @@ impl AssembledInstruction {
                         ),
                         None,
                     ),
-                    _ => return Err(AssemblerError::ParameterMismatch),
+                    [Parameter::Label(label), Parameter::X] => (
+                        (
+                            AddressingMode::AbsoluteIndexedIndirectX,
+                            Some(AssembledParameter::Label(label.to_string())),
+                        ),
+                        None,
+                    ),
+                    _ => {
+                        return Err(AssemblerError::ParameterMismatch(format!(
+                            "could not match parameters with addressing mode: {:?}",
+                            instruction.mnemonic
+                        )));
+                    }
                 },
-                _ => return Err(AssemblerError::ParameterMismatch),
+                _ => {
+                    return Err(AssemblerError::ParameterMismatch(format!(
+                        "could not match parameters with addressing mode: {:?}",
+                        instruction.mnemonic
+                    )));
+                }
             },
             Parameter::List(inner) => match inner.as_slice() {
                 [Parameter::Absolute(number), Parameter::X] => (
@@ -289,10 +343,24 @@ impl AssembledInstruction {
                     ),
                     None,
                 ),
+                [Parameter::Label(label), Parameter::X] => (
+                    (
+                        AddressingMode::AbsoluteIndexedX,
+                        Some(AssembledParameter::Label(label.to_string())),
+                    ),
+                    None,
+                ),
                 [Parameter::Absolute(number), Parameter::Y] => (
                     (
                         AddressingMode::AbsoluteIndexedY,
                         Some(AssembledParameter::U16(*number)),
+                    ),
+                    None,
+                ),
+                [Parameter::Label(label), Parameter::Y] => (
+                    (
+                        AddressingMode::AbsoluteIndexedY,
+                        Some(AssembledParameter::Label(label.to_string())),
                     ),
                     None,
                 ),
@@ -304,11 +372,36 @@ impl AssembledInstruction {
                         ),
                         None,
                     ),
-                    _ => return Err(AssemblerError::ParameterMismatch),
+                    _ => {
+                        return Err(AssemblerError::ParameterMismatch(format!(
+                            "could not match parameters with addressing mode: {:?}",
+                            instruction.mnemonic
+                        )));
+                    }
                 },
-                _ => return Err(AssemblerError::ParameterMismatch),
+                [Parameter::Absolute(number), Parameter::Label(label)] => (
+                    (
+                        AddressingMode::Absolute,
+                        Some(AssembledParameter::U16(*number)),
+                    ),
+                    Some((
+                        AddressingMode::ProgramCounterRelative,
+                        Some(AssembledParameter::Label(label.to_string())),
+                    )),
+                ),
+                _ => {
+                    return Err(AssemblerError::ParameterMismatch(format!(
+                        "could not match parameters with addressing mode: {:?}",
+                        instruction.mnemonic
+                    )));
+                }
             },
-            _ => return Err(AssemblerError::ParameterMismatch),
+            _ => {
+                return Err(AssemblerError::ParameterMismatch(format!(
+                    "could not match parameters with addressing mode: {:?}",
+                    instruction.mnemonic
+                )));
+            }
         })
     }
 
@@ -323,7 +416,6 @@ impl AssembledInstruction {
                 .get(label)
                 .copied()
                 .ok_or_else(|| AssemblerError::UnknownLabel((*label).to_string()))?;
-            // TODO: more addressing modes for labels
             match addressing_mode {
                 AddressingMode::ProgramCounterRelative => {
                     // pc + n = resolved <=> n = resolved - pc
@@ -346,7 +438,18 @@ impl AssembledInstruction {
                     }?;
                     *parameter = AssembledParameter::U8(diff as u8);
                 }
-                _ => return Err(AssemblerError::ParameterMismatch),
+                AddressingMode::Absolute
+                | AddressingMode::AbsoluteIndexedX
+                | AddressingMode::AbsoluteIndexedY
+                | AddressingMode::AbsoluteIndirect
+                | AddressingMode::AbsoluteIndexedIndirectX => {
+                    *parameter = AssembledParameter::U16(resolved);
+                }
+                _ => {
+                    return Err(AssemblerError::ParameterMismatch(format!(
+                        "could not replace label with actual address: {addressing_mode:?}"
+                    )));
+                }
             }
         }
         Ok(())
