@@ -1,4 +1,5 @@
 use crate::device::MemoryDevice;
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 pub trait Memory {
@@ -57,7 +58,11 @@ impl Contiguous {
     /// Create memory with `data` placed at `load_address`.
     pub fn from_bytes_at(data: &[u8], load_address: u16) -> Self {
         let mut memory = Self::default();
-        memory.0[load_address as usize..].copy_from_slice(data);
+        let remaining = memory.0.len() - load_address as usize;
+        let to_copy = data.len().min(remaining);
+        (&mut memory.0[load_address as usize..])
+            .write_all(&data[..to_copy])
+            .unwrap();
         memory
     }
 }

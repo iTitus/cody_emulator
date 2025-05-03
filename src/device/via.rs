@@ -2,6 +2,37 @@ use crate::device::MemoryDevice;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Via {
+    /// 0: VIA_IORB
+    ///
+    /// 1: VIA_IORA
+    ///
+    /// 2: VIA_DDRB
+    ///
+    /// 3: VIA_DDRA
+    ///
+    /// 4: VIA_T1CL
+    ///
+    /// 5: VIA_T1CH
+    ///
+    /// 6: VIA_T1LL
+    ///
+    /// 7: VIA_T1LH
+    ///
+    /// 8: VIA_T2CL
+    ///
+    /// 9: VIA_T2CH
+    ///
+    /// A: VIA_SR
+    ///
+    /// B: VIA_ACR
+    ///
+    /// C: VIA_PCR
+    ///
+    /// D: VIA_IFR
+    ///
+    /// E: VIA_IER
+    ///
+    /// F: VIA_IORA (no handshake)
     registers: [u8; 16],
     key_state: [u8; 8],
 }

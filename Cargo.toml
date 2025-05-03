@@ -10,15 +10,17 @@ license = "MIT"
 [dependencies]
 bitfields = "0.13"
 clap = { version = "4.5", features = ["derive"] }
+clap-num = "1.2"
+env_logger = "0.11"
 itertools = "0.14"
 lazy_static = "1.5"
+log = "0.4"
 strum = { version = "0.27", features = ["derive"] }
 thiserror = "2"
 
 # graphics
 bytemuck = { version = "1.23", features = ["latest_stable_rust"] }
 glam = { version = "0.30", features = ["bytemuck"] }
-env_logger = "0.11"
 pollster = "0.4"
 wgpu = "25.0"
 winit = "0.30"

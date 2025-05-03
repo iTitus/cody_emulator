@@ -2,6 +2,7 @@ use crate::interrupt::InterruptProvider;
 use crate::memory::Memory;
 use crate::opcode::{AddressingMode, Opcode, get_instruction};
 use bitfields::bitfield;
+use log::trace;
 
 #[bitfield(u8)]
 #[derive(Copy, Clone)]
@@ -112,8 +113,10 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
                 continue; // busy looping
             }
 
+            let pc = self.pc;
             let opcode = get_instruction(self.read_u8_inc_pc());
             if let Some(opcode) = opcode {
+                trace!("Executing opcode 0x{pc:04X} {opcode:?}");
                 match opcode.opcode {
                     Opcode::ADC => {
                         let m = self.read_operand(opcode.parameter_1);

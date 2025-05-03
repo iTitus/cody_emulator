@@ -3,6 +3,7 @@ use crate::device::via::Via;
 use crate::interrupt::{InterruptTrigger, SimpleInterruptProvider};
 use crate::memory::{Contiguous, MappedMemory, Memory};
 use glam::{Mat4, Quat, Vec2, Vec3};
+use log::info;
 use std::fs::File;
 use std::io::Read;
 use std::mem::offset_of;
@@ -629,29 +630,79 @@ impl<M: Memory> ApplicationHandler for App<M> {
     }
 }
 
-pub fn start(path: impl AsRef<Path>) {
-    // wgpu uses `log` for all of our logging, so we initialize a logger with the `env_logger` crate.
-    //
-    // To change the log level, set the `RUST_LOG` environment variable. See the `env_logger`
-    // documentation for more information.
-    env_logger::init();
-
+pub fn start(
+    path: impl AsRef<Path>,
+    cartridge: Option<impl AsRef<Path>>,
+    load_address: Option<u16>,
+    reset_vector: Option<u16>,
+    irq_vector: Option<u16>,
+    nmi_vector: Option<u16>,
+) {
+    info!("Loading binary {}", path.as_ref().display());
     let mut f = File::open(path).unwrap();
     let mut data = vec![];
     f.read_to_end(&mut data).unwrap();
-    let memory = Arc::new(Mutex::new(MappedMemory::from_memory(
-        Contiguous::from_bytes_at(&data, 0xE000),
-    )));
+    drop(f);
+
+    let actual_load_address = load_address.unwrap_or(0);
+    info!("Loading data at address 0x{actual_load_address:04X}");
+    let mut memory = Contiguous::from_bytes_at(&data, actual_load_address);
+
+    if let Some(_cartridge) = cartridge {
+        todo!("cartridges not implemented yet");
+        /*info!("Loading cartridge {}", cartridge.as_ref().display());let mut fc = File::open(cartridge).unwrap();
+        let mut cartridge_data = vec![];
+        fc.read_to_end(&mut cartridge_data).unwrap();
+        drop(fc);
+        assert!(
+            cartridge_data.len() >= 4,
+            "cartridge binary must have at least 4 bytes"
+        );
+
+        // TODO: implement this via SPI instead and let codybasic load it
+        let first = u16::from_le_bytes(cartridge_data[0..2].try_into().unwrap());
+        let last = u16::from_le_bytes(cartridge_data[2..4].try_into().unwrap());
+        let expected_len = last
+            .checked_sub(first)
+            .expect("illegal cartridge header: last > first") as usize
+            + 1;
+        assert_eq!(
+            expected_len,
+            cartridge_data.len() - 4,
+            "illegal cartridge header: expected size does not match actual size"
+        );
+        info!("Override memory with cartridge data at 0x{first:04X}-0x{last:04X}");
+        memory.0[first as usize..=last as usize].copy_from_slice(&cartridge_data[4..]);
+        info!("Override reset vector with 0x{first:04X}");
+        reset_vector = Some(first);*/
+    }
+
+    if let Some(reset_vector) = reset_vector {
+        info!("Setting reset vector to 0x{reset_vector:04X}");
+        memory.write_u16(0xFFFC, reset_vector);
+    }
+    if let Some(irq_vector) = irq_vector {
+        info!("Setting irq vector to 0x{irq_vector:04X}");
+        memory.write_u16(0xFFFE, irq_vector);
+    }
+    if let Some(nmi_vector) = nmi_vector {
+        info!("Setting nmi vector to 0x{nmi_vector:04X}");
+        memory.write_u16(0xFFFA, nmi_vector);
+    }
+
+    let memory = Arc::new(Mutex::new(MappedMemory::from_memory(memory)));
     let via_device = Arc::new(Mutex::new(Via::default()));
     memory.lock().unwrap().add_device(Arc::clone(&via_device));
 
     let interrupt_provider = Arc::new(Mutex::new(SimpleInterruptProvider::default()));
     let mut cpu = Cpu::new(Arc::clone(&memory), Arc::clone(&interrupt_provider));
+    info!("Starting cpu");
     thread::spawn(move || {
         cpu.run();
     });
 
     // TODO: make this use the VIA registers for configuration
+    info!("Starting interrupt timer");
     let mut interrupt_trigger = Arc::clone(&interrupt_provider);
     thread::spawn(move || {
         loop {
@@ -660,6 +711,7 @@ pub fn start(path: impl AsRef<Path>) {
         }
     });
 
+    info!("Starting window event loop");
     let event_loop = EventLoop::new().unwrap();
 
     // When the current loop iteration finishes, immediately begin a new
