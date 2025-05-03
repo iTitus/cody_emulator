@@ -633,7 +633,7 @@ impl<M: Memory> ApplicationHandler for App<M> {
 pub fn start(
     path: impl AsRef<Path>,
     cartridge: Option<impl AsRef<Path>>,
-    load_address: Option<u16>,
+    load_address: u16,
     reset_vector: Option<u16>,
     irq_vector: Option<u16>,
     nmi_vector: Option<u16>,
@@ -644,9 +644,8 @@ pub fn start(
     f.read_to_end(&mut data).unwrap();
     drop(f);
 
-    let actual_load_address = load_address.unwrap_or(0);
-    info!("Loading data at address 0x{actual_load_address:04X}");
-    let mut memory = Contiguous::from_bytes_at(&data, actual_load_address);
+    info!("Loading data at address 0x{load_address:04X}");
+    let mut memory = Contiguous::from_bytes_at(&data, load_address);
 
     if let Some(_cartridge) = cartridge {
         todo!("cartridges not implemented yet");

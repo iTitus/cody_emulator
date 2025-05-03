@@ -14,9 +14,9 @@ struct Cli {
     #[arg(long)]
     cartridge: Option<PathBuf>,
 
-    /// Custom load address
-    #[arg(long, value_parser=maybe_hex::<u16>)]
-    load_address: Option<u16>,
+    /// Load address
+    #[arg(long, value_parser=maybe_hex::<u16>, default_value = "0xE000")]
+    load_address: u16,
 
     /// Override Reset Vector (0xFFFC)
     #[arg(long, value_parser=maybe_hex::<u16>)]
