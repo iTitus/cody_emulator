@@ -378,6 +378,7 @@ impl State {
         if (control & 0x1) != 0 {
             return;
         }
+        let bitmap_mode = (control & 0x10) != 0;
 
         let base = memory.read_u8(0xD003);
         let _scroll = memory.read_u8(0xD004);
@@ -392,12 +393,21 @@ impl State {
             let cx = i % 40;
             let cy = i / 40;
 
-            let character = memory.read_u8(screen_memory_start.wrapping_add(i));
+            let character = if bitmap_mode {
+                // for bitmap mode: unused
+                0
+            } else {
+                // for normal mode: the character code (CODSCII)
+                memory.read_u8(screen_memory_start.wrapping_add(i)) as u16
+            };
             let local_color = memory.read_u8(color_memory_start.wrapping_add(i));
 
             for yy in 0..8 {
-                let char_row_data =
-                    memory.read_u8(character_memory_start.wrapping_add(8 * character as u16 + yy));
+                let char_row_data = if bitmap_mode {
+                    memory.read_u8(screen_memory_start.wrapping_add(8 * i + yy))
+                } else {
+                    memory.read_u8(character_memory_start.wrapping_add(8 * character + yy))
+                };
                 for xx in 0..4 {
                     let char_pixel_data = (char_row_data >> (2 * (3 - xx))) & 0x3;
                     let palette_index = match char_pixel_data {
