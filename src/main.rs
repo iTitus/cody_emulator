@@ -10,7 +10,7 @@ struct Cli {
     /// Binary file
     file: PathBuf,
 
-    /// Load given cartridge in addition to binary
+    /// Load given file as cartridge in addition to binary
     #[arg(long)]
     cartridge: Option<PathBuf>,
 
