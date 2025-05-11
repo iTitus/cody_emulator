@@ -22,12 +22,12 @@ use winit::{
     window::{Window, WindowId},
 };
 
-const CONTENT_WIDTH: u32 = 160;
-const CONTENT_HEIGHT: u32 = 200;
+const CONTENT_WIDTH: u8 = 160;
+const CONTENT_HEIGHT: u8 = 200;
 const BORDER_X: u32 = 4;
 const BORDER_Y: u32 = 8;
-const WIDTH: u32 = CONTENT_WIDTH + 2 * BORDER_X;
-const HEIGHT: u32 = CONTENT_HEIGHT + 2 * BORDER_Y;
+const WIDTH: u32 = CONTENT_WIDTH as u32 + 2 * BORDER_X;
+const HEIGHT: u32 = CONTENT_HEIGHT as u32 + 2 * BORDER_Y;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -380,13 +380,13 @@ impl State {
 
         let base = memory.read_u8(0xD003);
         let _scroll = memory.read_u8(0xD004);
-        let screen_color = memory.read_u8(0xD005);
-        let _sprite = memory.read_u8(0xD006);
+        let screen_colors = memory.read_u8(0xD005);
 
         let color_memory_start = 0xA000u16.wrapping_add(0x400 * (color >> 4) as u16);
         let screen_memory_start = 0xA000u16.wrapping_add(0x400 * (base >> 4) as u16);
         let character_memory_start = 0xA000u16.wrapping_add(0x800 * (base & 0xF) as u16);
 
+        // background
         for i in 0..1000 {
             let cx = i % 40;
             let cy = i / 40;
@@ -398,7 +398,7 @@ impl State {
                 // for normal mode: the character code (CODSCII)
                 memory.read_u8(screen_memory_start.wrapping_add(i)) as u16
             };
-            let local_color = memory.read_u8(color_memory_start.wrapping_add(i));
+            let local_colors = memory.read_u8(color_memory_start.wrapping_add(i));
 
             for yy in 0..8 {
                 let char_row_data = if bitmap_mode {
@@ -409,10 +409,10 @@ impl State {
                 for xx in 0..4 {
                     let char_pixel_data = (char_row_data >> (2 * (3 - xx))) & 0x3;
                     let palette_index = match char_pixel_data {
-                        0 => local_color & 0xF,
-                        1 => local_color >> 4,
-                        2 => screen_color & 0xF,
-                        3 => screen_color >> 4,
+                        0 => local_colors & 0xF,
+                        1 => local_colors >> 4,
+                        2 => screen_colors & 0xF,
+                        3 => screen_colors >> 4,
                         _ => unreachable!(),
                     };
 
@@ -425,6 +425,59 @@ impl State {
             }
         }
 
+        // sprites
+        const SPRITE_WIDTH: u8 = 12;
+        const SPRITE_HEIGHT: u8 = 21;
+
+        let sprite = memory.read_u8(0xD006);
+        let sprite_common_color = sprite & 0xF;
+        let sprite_bank_start = 0xD080u16.wrapping_add(0x20 * ((sprite >> 4) as u16));
+        for sprite_index in 0..8 {
+            let sprite_data_start = sprite_bank_start.wrapping_add(4 * sprite_index);
+            let sprite_pos_x = memory.read_u8(sprite_data_start);
+            let sprite_pos_y = memory.read_u8(sprite_data_start.wrapping_add(1));
+            let sprite_colors = memory.read_u8(sprite_data_start.wrapping_add(2));
+            let sprite_location = 0xA000u16
+                .wrapping_add(0x40 * memory.read_u8(sprite_data_start.wrapping_add(3)) as u16);
+
+            if sprite_pos_x == 0 || sprite_pos_x >= CONTENT_WIDTH + SPRITE_WIDTH {
+                continue;
+            }
+            if sprite_pos_y == 0 || sprite_pos_y >= CONTENT_HEIGHT + SPRITE_HEIGHT {
+                continue;
+            }
+            let sprite_start_x = SPRITE_WIDTH.saturating_sub(sprite_pos_x);
+            let sprite_end_x = SPRITE_WIDTH - (sprite_pos_x.saturating_sub(CONTENT_WIDTH));
+            let sprite_start_y = SPRITE_HEIGHT.saturating_sub(sprite_pos_y);
+            let sprite_end_y = SPRITE_HEIGHT - (sprite_pos_y.saturating_sub(CONTENT_HEIGHT));
+
+            for sprite_y in sprite_start_y..sprite_end_y {
+                for sprite_x in sprite_start_x..sprite_end_x {
+                    let sprite_pixel_index = sprite_y * SPRITE_WIDTH + sprite_x;
+                    let sprite_byte_index = sprite_pixel_index / 4;
+                    let sprite_byte_bit_shift = 2 * (3 - (sprite_pixel_index % 4));
+                    let sprite_pixel_data = (memory
+                        .read_u8(sprite_location.wrapping_add(sprite_byte_index as u16))
+                        >> sprite_byte_bit_shift)
+                        & 0x3;
+                    let palette_index = match sprite_pixel_data {
+                        0 => continue, // transparent
+                        1 => sprite_colors & 0xF,
+                        2 => sprite_colors >> 4,
+                        3 => sprite_common_color,
+                        _ => unreachable!(),
+                    };
+
+                    let pixel_pos = (sprite_pos_y as usize + sprite_y as usize + BORDER_Y as usize
+                        - SPRITE_HEIGHT as usize)
+                        * WIDTH as usize
+                        + (sprite_pos_x as usize + sprite_x as usize + BORDER_X as usize
+                            - SPRITE_WIDTH as usize);
+                    let pixel = &mut self.raw_pixels[pixel_pos];
+                    *pixel = Color::PALETTE[palette_index as usize];
+                }
+            }
+        }
     }
 
     fn render(&mut self, memory: &Arc<Mutex<impl Memory>>) {
