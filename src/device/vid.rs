@@ -10,6 +10,7 @@ use std::mem::offset_of;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 use wgpu;
 use wgpu::util::DeviceExt;
 use winit::event::ElementState;
@@ -365,9 +366,6 @@ impl State {
     fn render_pixels(&mut self, memory: &Arc<Mutex<impl Memory>>) {
         let mut memory = memory.lock().unwrap();
 
-        // set blanking register to 0 because we are drawing now
-        memory.write_u8(0xD000, 0);
-
         let control = memory.read_u8(0xD001);
         let color = memory.read_u8(0xD002);
 
@@ -427,8 +425,6 @@ impl State {
             }
         }
 
-        // set blanking register to 1
-        memory.write_u8(0xD000, 1);
     }
 
     fn render(&mut self, memory: &Arc<Mutex<impl Memory>>) {
@@ -588,11 +584,11 @@ impl State {
     }
 }
 
-#[derive(Default)]
 struct App<M> {
     state: Option<State>,
     memory: Arc<Mutex<M>>,
     via_device: Arc<Mutex<Via>>,
+    last_frame: Option<Instant>,
 }
 
 impl<M: Memory> ApplicationHandler for App<M> {
@@ -619,7 +615,31 @@ impl<M: Memory> ApplicationHandler for App<M> {
             WindowEvent::RedrawRequested => {
                 // Emits a new redraw requested event.
                 state.get_window().request_redraw();
-                state.render(&self.memory);
+
+                const FPS: u64 = 30;
+                const FPS_DELTA_TIME: Duration =
+                    Duration::from_nanos((Duration::from_secs(1).as_nanos() as u64) / FPS);
+                const FPS_DRAWING_INTERVAL: Duration = Duration::from_nanos(
+                    (Duration::from_secs(1).as_nanos() as u64) / FPS * 480 / 525,
+                );
+                let now = Instant::now();
+                if self
+                    .last_frame
+                    .is_none_or(|last_frame| (now - last_frame) >= FPS_DELTA_TIME)
+                {
+                    self.last_frame = Some(now);
+
+                    // set blanking register to 0 because we are drawing now
+                    self.memory.write_u8(0xD000, 0);
+
+                    state.render(&self.memory);
+                } else if self
+                    .last_frame
+                    .is_some_and(|last_frame| (now - last_frame) >= FPS_DRAWING_INTERVAL)
+                {
+                    // reset blanking register to 1 for blanking interval
+                    self.memory.write_u8(0xD000, 1);
+                }
             }
             WindowEvent::Resized(size) => {
                 // Reconfigures the size of the surface. We do not re-render
@@ -739,6 +759,7 @@ pub fn start(
         state: None,
         memory,
         via_device,
+        last_frame: None,
     };
     event_loop.run_app(&mut app).unwrap();
 }
