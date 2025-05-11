@@ -376,51 +376,95 @@ impl State {
         if (control & 0x1) != 0 {
             return;
         }
+        let enable_v_scroll = (control & 0x2) != 0;
+        let enable_h_scroll = (control & 0x4) != 0;
+        let _enable_row_effects = (control & 0x8) != 0;
         let bitmap_mode = (control & 0x10) != 0;
 
         let base = memory.read_u8(0xD003);
-        let _scroll = memory.read_u8(0xD004);
+        let (v_scroll_amount, h_scroll_amount) = {
+            let scroll = memory.read_u8(0xD004);
+            (
+                if enable_v_scroll { scroll & 0x7 } else { 0 },
+                if enable_h_scroll {
+                    (scroll >> 4) & 0x3
+                } else {
+                    0
+                },
+            )
+        };
         let screen_colors = memory.read_u8(0xD005);
 
         let color_memory_start = 0xA000u16.wrapping_add(0x400 * (color >> 4) as u16);
         let screen_memory_start = 0xA000u16.wrapping_add(0x400 * (base >> 4) as u16);
         let character_memory_start = 0xA000u16.wrapping_add(0x800 * (base & 0xF) as u16);
 
+        // fine scrolling
+        let width = CONTENT_WIDTH - if enable_h_scroll { 2 * 4 } else { 0 };
+        let height = CONTENT_HEIGHT - if enable_v_scroll { 8 } else { 0 };
+        let border_x = BORDER_X as usize + if enable_h_scroll { 2 * 2 } else { 0 };
+        let border_y = BORDER_Y as usize + if enable_v_scroll { 4 } else { 0 };
+
         // background
-        for i in 0..1000 {
-            let cx = i % 40;
-            let cy = i / 40;
+        let cx_end = if enable_h_scroll { 39 } else { 40 };
+        let cy_end = 25;
+        for cy in 0..cy_end {
+            for cx in 0..cx_end {
+                let i = cy * 40 + cx;
 
-            let character = if bitmap_mode {
-                // for bitmap mode: unused
-                0
-            } else {
-                // for normal mode: the character code (CODSCII)
-                memory.read_u8(screen_memory_start.wrapping_add(i)) as u16
-            };
-            let local_colors = memory.read_u8(color_memory_start.wrapping_add(i));
-
-            for yy in 0..8 {
-                let char_row_data = if bitmap_mode {
-                    memory.read_u8(screen_memory_start.wrapping_add(8 * i + yy))
+                let character = if bitmap_mode {
+                    // for bitmap mode: unused
+                    0
                 } else {
-                    memory.read_u8(character_memory_start.wrapping_add(8 * character + yy))
+                    // for normal mode: the character code (CODSCII)
+                    memory.read_u8(screen_memory_start.wrapping_add(i)) as u16
                 };
-                for xx in 0..4 {
-                    let char_pixel_data = (char_row_data >> (2 * (3 - xx))) & 0x3;
-                    let palette_index = match char_pixel_data {
-                        0 => local_colors & 0xF,
-                        1 => local_colors >> 4,
-                        2 => screen_colors & 0xF,
-                        3 => screen_colors >> 4,
-                        _ => unreachable!(),
-                    };
+                let local_colors = memory.read_u8(color_memory_start.wrapping_add(i));
 
-                    let pixel_pos = (cy as usize * 8 + yy as usize + BORDER_Y as usize)
-                        * WIDTH as usize
-                        + (cx as usize * 4 + xx as usize + BORDER_X as usize);
-                    let pixel = &mut self.raw_pixels[pixel_pos];
-                    *pixel = Color::PALETTE[palette_index as usize];
+                let xx_start = if enable_h_scroll && cx == 0 {
+                    h_scroll_amount
+                } else {
+                    0
+                };
+                let xx_end = if enable_h_scroll && cx == cx_end - 1 {
+                    h_scroll_amount
+                } else {
+                    4
+                };
+                let yy_start = if enable_v_scroll && cy == 0 {
+                    v_scroll_amount
+                } else {
+                    0
+                };
+                let yy_end = if enable_v_scroll && cy == cy_end - 1 {
+                    v_scroll_amount
+                } else {
+                    8
+                };
+                for yy in yy_start..yy_end {
+                    let char_row_data = if bitmap_mode {
+                        memory.read_u8(screen_memory_start.wrapping_add(8 * i + yy as u16))
+                    } else {
+                        memory
+                            .read_u8(character_memory_start.wrapping_add(8 * character + yy as u16))
+                    };
+                    for xx in xx_start..xx_end {
+                        let char_pixel_data = (char_row_data >> (2 * (3 - xx))) & 0x3;
+                        let palette_index = match char_pixel_data {
+                            0 => local_colors & 0xF,
+                            1 => local_colors >> 4,
+                            2 => screen_colors & 0xF,
+                            3 => screen_colors >> 4,
+                            _ => unreachable!(),
+                        };
+
+                        let pixel_pos = (cy as usize * 8 + yy as usize + border_y
+                            - v_scroll_amount as usize)
+                            * WIDTH as usize
+                            + (cx as usize * 4 + xx as usize + border_x - h_scroll_amount as usize);
+                        let pixel = &mut self.raw_pixels[pixel_pos];
+                        *pixel = Color::PALETTE[palette_index as usize];
+                    }
                 }
             }
         }
@@ -440,16 +484,16 @@ impl State {
             let sprite_location = 0xA000u16
                 .wrapping_add(0x40 * memory.read_u8(sprite_data_start.wrapping_add(3)) as u16);
 
-            if sprite_pos_x == 0 || sprite_pos_x >= CONTENT_WIDTH + SPRITE_WIDTH {
+            if sprite_pos_x == 0 || sprite_pos_x >= width + SPRITE_WIDTH {
                 continue;
             }
-            if sprite_pos_y == 0 || sprite_pos_y >= CONTENT_HEIGHT + SPRITE_HEIGHT {
+            if sprite_pos_y == 0 || sprite_pos_y >= height + SPRITE_HEIGHT {
                 continue;
             }
             let sprite_start_x = SPRITE_WIDTH.saturating_sub(sprite_pos_x);
-            let sprite_end_x = SPRITE_WIDTH - (sprite_pos_x.saturating_sub(CONTENT_WIDTH));
+            let sprite_end_x = SPRITE_WIDTH - (sprite_pos_x.saturating_sub(width));
             let sprite_start_y = SPRITE_HEIGHT.saturating_sub(sprite_pos_y);
-            let sprite_end_y = SPRITE_HEIGHT - (sprite_pos_y.saturating_sub(CONTENT_HEIGHT));
+            let sprite_end_y = SPRITE_HEIGHT - (sprite_pos_y.saturating_sub(height));
 
             for sprite_y in sprite_start_y..sprite_end_y {
                 for sprite_x in sprite_start_x..sprite_end_x {
@@ -468,10 +512,10 @@ impl State {
                         _ => unreachable!(),
                     };
 
-                    let pixel_pos = (sprite_pos_y as usize + sprite_y as usize + BORDER_Y as usize
+                    let pixel_pos = (sprite_pos_y as usize + sprite_y as usize + border_y
                         - SPRITE_HEIGHT as usize)
                         * WIDTH as usize
-                        + (sprite_pos_x as usize + sprite_x as usize + BORDER_X as usize
+                        + (sprite_pos_x as usize + sprite_x as usize + border_x
                             - SPRITE_WIDTH as usize);
                     let pixel = &mut self.raw_pixels[pixel_pos];
                     *pixel = Color::PALETTE[palette_index as usize];
