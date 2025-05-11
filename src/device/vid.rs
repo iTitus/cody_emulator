@@ -644,7 +644,9 @@ impl<M: Memory> ApplicationHandler for App<M> {
             WindowEvent::Resized(size) => {
                 // Reconfigures the size of the surface. We do not re-render
                 // here as this event is always followed up by redraw request.
-                state.resize(size);
+                if size.width > 0 && size.height > 0 {
+                    state.resize(size);
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
