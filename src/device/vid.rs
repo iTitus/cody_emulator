@@ -673,6 +673,12 @@ impl State {
             KeyCode::KeyY => 28,
             KeyCode::KeyI => 29,
             KeyCode::KeyP => 30,
+            // gamepad emulation
+            KeyCode::ArrowUp => 31, // up
+            KeyCode::ArrowDown => 32, // down
+            KeyCode::ArrowLeft => 33, // left
+            KeyCode::ArrowRight => 34, // right
+            KeyCode::AltLeft | KeyCode::AltRight => 35, // fire button
             _ => 0,
         };
         if cody_code > 0 {
