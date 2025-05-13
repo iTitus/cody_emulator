@@ -13,7 +13,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 use wgpu;
 use wgpu::util::DeviceExt;
-use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::{
     application::ApplicationHandler,
@@ -366,20 +365,32 @@ impl State {
     fn render_pixels(&mut self, memory: &Arc<Mutex<impl Memory>>) {
         let mut memory = memory.lock().unwrap();
 
-        let control = memory.read_u8(0xD001);
+        let (
+            disable_video,
+            enable_v_scroll,
+            enable_h_scroll,
+            _enable_row_effects,
+            bitmap_mode,
+            _hires_mode,
+        ) = {
+            let control = memory.read_u8(0xD001);
+            (
+                (control & 0x1) != 0,
+                (control & 0x2) != 0,
+                (control & 0x4) != 0,
+                (control & 0x8) != 0,
+                (control & 0x10) != 0,
+                (control & 0x20) != 0,
+            )
+        };
         let color = memory.read_u8(0xD002);
 
         let border_color = Color::PALETTE[(color & 0xF) as usize];
         self.raw_pixels.fill(border_color);
 
-        // check screen disable flag
-        if (control & 0x1) != 0 {
+        if disable_video {
             return;
         }
-        let enable_v_scroll = (control & 0x2) != 0;
-        let enable_h_scroll = (control & 0x4) != 0;
-        let _enable_row_effects = (control & 0x8) != 0;
-        let bitmap_mode = (control & 0x10) != 0;
 
         let base = memory.read_u8(0xD003);
         let (v_scroll_amount, h_scroll_amount) = {
@@ -674,10 +685,10 @@ impl State {
             KeyCode::KeyI => 29,
             KeyCode::KeyP => 30,
             // gamepad emulation
-            KeyCode::ArrowUp => 31, // up
-            KeyCode::ArrowDown => 32, // down
-            KeyCode::ArrowLeft => 33, // left
-            KeyCode::ArrowRight => 34, // right
+            KeyCode::ArrowUp => 31,                     // up
+            KeyCode::ArrowDown => 32,                   // down
+            KeyCode::ArrowLeft => 33,                   // left
+            KeyCode::ArrowRight => 34,                  // right
             KeyCode::AltLeft | KeyCode::AltRight => 35, // fire button
             _ => 0,
         };
@@ -720,11 +731,10 @@ impl<M: Memory> ApplicationHandler for App<M> {
                 state.get_window().request_redraw();
 
                 const FPS: u64 = 30;
-                const FPS_DELTA_TIME: Duration =
-                    Duration::from_nanos((Duration::from_secs(1).as_nanos() as u64) / FPS);
-                const FPS_DRAWING_INTERVAL: Duration = Duration::from_nanos(
-                    (Duration::from_secs(1).as_nanos() as u64) / FPS * 480 / 525,
-                );
+                const NANOS_PER_SEC: u64 = Duration::from_secs(1).as_nanos() as u64;
+                const FPS_DELTA_TIME: Duration = Duration::from_nanos(NANOS_PER_SEC / FPS);
+                const FPS_DRAWING_INTERVAL: Duration =
+                    Duration::from_nanos(NANOS_PER_SEC / FPS * 480 / 525);
                 let now = Instant::now();
                 if self
                     .last_frame
@@ -753,11 +763,7 @@ impl<M: Memory> ApplicationHandler for App<M> {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    state.on_keyboard_input(
-                        &self.via_device,
-                        code,
-                        event.state == ElementState::Pressed,
-                    );
+                    state.on_keyboard_input(&self.via_device, code, event.state.is_pressed());
                 }
             }
             _ => {}
