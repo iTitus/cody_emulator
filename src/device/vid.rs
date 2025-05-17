@@ -806,24 +806,53 @@ impl<M: Memory> ApplicationHandler for App<M> {
 
 pub fn start(
     path: impl AsRef<Path>,
-    cartridge: Option<impl AsRef<Path>>,
-    load_address: u16,
+    cartridge: bool, // TODO: Option<impl AsRef<Path>>,
+    mut load_address: Option<u16>,
     reset_vector: Option<u16>,
     irq_vector: Option<u16>,
     nmi_vector: Option<u16>,
 ) {
-    info!("Loading binary {}", path.as_ref().display());
+    info!(
+        "Loading binary {}{}",
+        path.as_ref().display(),
+        if cartridge { " as cartridge" } else { "" }
+    );
     let mut f = File::open(path).unwrap();
     let mut data = vec![];
     f.read_to_end(&mut data).unwrap();
     drop(f);
 
-    info!("Loading data at address 0x{load_address:04X}");
+    if cartridge {
+        let cartridge_load_address = u16::from_le_bytes(
+            data[0..2]
+                .try_into()
+                .expect("cartridge header must be at least 4 bytes"),
+        );
+        let cartridge_end_address = u16::from_le_bytes(
+            data[2..4]
+                .try_into()
+                .expect("cartridge header must be at least 4 bytes"),
+        );
+        let len = (cartridge_end_address as usize)
+            .checked_sub(cartridge_load_address as usize)
+            .and_then(|len| len.checked_add(1))
+            .expect("cartridge start address must be <= end address");
+        assert!(data.len() - 4 >= len);
+
+        data = data.drain(4..(len + 4)).collect();
+        load_address = load_address.or(Some(cartridge_load_address));
+    }
+
+    assert!(!data.is_empty(), "data must not be empty");
+    let load_address = load_address.unwrap_or(0xE000);
+    info!(
+        "Loading data at address 0x{load_address:04X}-0x{:04X}",
+        (load_address as usize + data.len() - 1).min(0xFFFF)
+    );
     let mut memory = Contiguous::from_bytes_at(&data, load_address);
 
-    if let Some(_cartridge) = cartridge {
-        todo!("cartridges not implemented yet");
-        /*info!("Loading cartridge {}", cartridge.as_ref().display());let mut fc = File::open(cartridge).unwrap();
+    /*if let Some(_cartridge) = cartridge {
+        info!("Loading cartridge {}", cartridge.as_ref().display());let mut fc = File::open(cartridge).unwrap();
         let mut cartridge_data = vec![];
         fc.read_to_end(&mut cartridge_data).unwrap();
         drop(fc);
@@ -847,10 +876,10 @@ pub fn start(
         info!("Override memory with cartridge data at 0x{first:04X}-0x{last:04X}");
         memory.0[first as usize..=last as usize].copy_from_slice(&cartridge_data[4..]);
         info!("Override reset vector with 0x{first:04X}");
-        reset_vector = Some(first);*/
-    }
+        reset_vector = Some(first);
+    }*/
 
-    if let Some(reset_vector) = reset_vector {
+    if let Some(reset_vector) = reset_vector.or(if cartridge { Some(load_address) } else { None }) {
         info!("Setting reset vector to 0x{reset_vector:04X}");
         memory.write_u16(0xFFFC, reset_vector);
     }

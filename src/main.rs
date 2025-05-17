@@ -2,6 +2,7 @@ use clap::Parser;
 use clap_num::maybe_hex;
 use cody_emulator::assembler::disassemble;
 use cody_emulator::device::vid;
+use std::env;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -10,13 +11,13 @@ struct Cli {
     /// Binary file
     file: PathBuf,
 
-    /// Load given file as cartridge in addition to binary
-    #[arg(long)]
-    cartridge: Option<PathBuf>,
+    /// Load the binary file as a cartridge, expects the file to have a cartridge header
+    #[arg(long, default_value_t = false)]
+    as_cartridge: bool,
 
-    /// Load address
-    #[arg(long, value_parser=maybe_hex::<u16>, default_value = "0xE000")]
-    load_address: u16,
+    /// Load address, default value is 0xE000
+    #[arg(long, value_parser=maybe_hex::<u16>)]
+    load_address: Option<u16>,
 
     /// Override Reset Vector (0xFFFC)
     #[arg(long, value_parser=maybe_hex::<u16>)]
@@ -29,17 +30,33 @@ struct Cli {
     /// Override Non-maskable Interrupt Vector (0xFFFA)
     #[arg(long, value_parser=maybe_hex::<u16>)]
     nmi_vector: Option<u16>,
+
+    /// Each time this option is added increases the default logging level
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
 }
 
 pub fn main() {
+    let cli = Cli::parse();
+
     // To change the log level, set the `RUST_LOG` environment variable. See the `env_logger`
     // documentation for more information.
+    unsafe {
+        if env::var(env_logger::DEFAULT_FILTER_ENV).is_err() {
+            match cli.verbose {
+                0 => env::set_var(env_logger::DEFAULT_FILTER_ENV, "error"),
+                1 => env::set_var(env_logger::DEFAULT_FILTER_ENV, "warn"),
+                2 => env::set_var(env_logger::DEFAULT_FILTER_ENV, "info"),
+                3 => env::set_var(env_logger::DEFAULT_FILTER_ENV, "debug"),
+                4.. => env::set_var(env_logger::DEFAULT_FILTER_ENV, "trace"),
+            }
+        }
+    }
     env_logger::init();
 
-    let cli = Cli::parse();
     vid::start(
         &cli.file,
-        cli.cartridge.as_deref(),
+        cli.as_cartridge,
         cli.load_address,
         cli.reset_vector,
         cli.irq_vector,
