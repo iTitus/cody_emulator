@@ -44,11 +44,10 @@ pub fn main() {
     unsafe {
         if env::var(env_logger::DEFAULT_FILTER_ENV).is_err() {
             match cli.verbose {
-                0 => env::set_var(env_logger::DEFAULT_FILTER_ENV, "error"),
-                1 => env::set_var(env_logger::DEFAULT_FILTER_ENV, "warn"),
-                2 => env::set_var(env_logger::DEFAULT_FILTER_ENV, "info"),
-                3 => env::set_var(env_logger::DEFAULT_FILTER_ENV, "debug"),
-                4.. => env::set_var(env_logger::DEFAULT_FILTER_ENV, "trace"),
+                0 => env::set_var(env_logger::DEFAULT_FILTER_ENV, "warn"),
+                1 => env::set_var(env_logger::DEFAULT_FILTER_ENV, "info"),
+                2 => env::set_var(env_logger::DEFAULT_FILTER_ENV, "debug"),
+                3.. => env::set_var(env_logger::DEFAULT_FILTER_ENV, "trace"),
             }
         }
     }
