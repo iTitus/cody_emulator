@@ -5,7 +5,12 @@ pub mod vid;
 
 pub trait MemoryDevice {
     fn read(&mut self, address: u16) -> Option<u8>;
+
     fn write(&mut self, address: u16, value: u8) -> Option<()>;
+
+    fn on_cycle(&mut self) {}
+
+    fn on_instruction_finished(&mut self) {}
 }
 
 impl<M: MemoryDevice> MemoryDevice for Arc<Mutex<M>> {

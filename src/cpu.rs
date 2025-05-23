@@ -153,273 +153,276 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
             self.p.set_decimal_mode(false);
             self.pc = self.memory.read_u16(NMI_VECTOR);
         }
-        if self.wai {
-            return; // busy looping
+        if !self.wai {
+            let pc = self.pc;
+            let opcode = get_instruction(self.read_u8_inc_pc());
+            if let Some(opcode) = opcode {
+                trace!("Executing opcode 0x{pc:04X} {opcode:?}");
+                match opcode.opcode {
+                    Opcode::ADC => {
+                        let m = self.read_operand(opcode.parameter_1);
+                        self.do_addition(m);
+                    }
+                    Opcode::AND => {
+                        let m = self.read_operand(opcode.parameter_1);
+                        self.set_a(self.a & m);
+                    }
+                    Opcode::ASL => {
+                        if opcode.parameter_1 == AddressingMode::Accumulator {
+                            let m = self.a;
+                            self.set_a(m << 1);
+                            self.p.set_carry((m & 0x80) != 0);
+                        } else {
+                            let addr = self.read_address(opcode.parameter_1);
+                            let m = self.memory.read_u8(addr);
+                            let value = m << 1;
+                            self.memory.write_u8(addr, value);
+                            self.update_nz_flags(value);
+                            self.p.set_carry((m & 0x80) != 0);
+                        }
+                    }
+                    Opcode::BBR0 => self.bbr(0),
+                    Opcode::BBR1 => self.bbr(1),
+                    Opcode::BBR2 => self.bbr(2),
+                    Opcode::BBR3 => self.bbr(3),
+                    Opcode::BBR4 => self.bbr(4),
+                    Opcode::BBR6 => self.bbr(5),
+                    Opcode::BBR5 => self.bbr(6),
+                    Opcode::BBR7 => self.bbr(7),
+                    Opcode::BBS0 => self.bbs(0),
+                    Opcode::BBS1 => self.bbs(1),
+                    Opcode::BBS2 => self.bbs(2),
+                    Opcode::BBS3 => self.bbs(3),
+                    Opcode::BBS4 => self.bbs(4),
+                    Opcode::BBS6 => self.bbs(5),
+                    Opcode::BBS5 => self.bbs(6),
+                    Opcode::BBS7 => self.bbs(7),
+                    Opcode::BCC => self.branch(!self.p.carry()),
+                    Opcode::BCS => self.branch(self.p.carry()),
+                    Opcode::BEQ => self.branch(self.p.zero()),
+                    Opcode::BIT => {
+                        let m = self.read_operand(opcode.parameter_1);
+                        self.p.set_zero((self.a & m) == 0);
+                        if opcode.parameter_1 != AddressingMode::Immediate {
+                            // N and V are only touched when not in immediate mode
+                            self.p.set_negative((m & 0x80) != 0);
+                            self.p.set_overflow((m & 0x40) != 0);
+                        }
+                    }
+                    Opcode::BMI => self.branch(self.p.negative()),
+                    Opcode::BNE => self.branch(!self.p.zero()),
+                    Opcode::BPL => self.branch(!self.p.negative()),
+                    Opcode::BRA => self.branch(true),
+                    Opcode::BRK => {
+                        self.pc = self.pc.wrapping_add(1); // skip unused 2nd instruction byte
+                        self.brk = true;
+                    }
+                    Opcode::BVC => self.branch(!self.p.overflow()),
+                    Opcode::BVS => self.branch(self.p.overflow()),
+                    Opcode::CLC => self.p.set_carry(false),
+                    Opcode::CLD => self.p.set_decimal_mode(false),
+                    Opcode::CLI => self.p.set_irqb_disable(false),
+                    Opcode::CLV => self.p.set_overflow(false),
+                    Opcode::CMP => self.cmp(self.a, opcode.parameter_1),
+                    Opcode::CPX => self.cmp(self.x, opcode.parameter_1),
+                    Opcode::CPY => self.cmp(self.y, opcode.parameter_1),
+                    Opcode::DEC => {
+                        if opcode.parameter_1 == AddressingMode::Accumulator {
+                            self.set_a(self.a.wrapping_sub(1));
+                        } else {
+                            let addr = self.read_address(opcode.parameter_1);
+                            let value = self.memory.read_u8(addr);
+                            let new_value = value.wrapping_sub(1);
+                            self.memory.write_u8(addr, new_value);
+                            self.update_nz_flags(new_value);
+                        }
+                    }
+                    Opcode::DEX => self.set_x(self.x.wrapping_sub(1)),
+                    Opcode::DEY => self.set_y(self.y.wrapping_sub(1)),
+                    Opcode::EOR => {
+                        let m = self.read_operand(opcode.parameter_1);
+                        self.set_a(self.a ^ m);
+                    }
+                    Opcode::INC => {
+                        if opcode.parameter_1 == AddressingMode::Accumulator {
+                            self.set_a(self.a.wrapping_add(1));
+                        } else {
+                            let addr = self.read_address(opcode.parameter_1);
+                            let value = self.memory.read_u8(addr);
+                            let new_value = value.wrapping_add(1);
+                            self.memory.write_u8(addr, new_value);
+                            self.update_nz_flags(new_value);
+                        }
+                    }
+                    Opcode::INX => self.set_x(self.x.wrapping_add(1)),
+                    Opcode::INY => self.set_y(self.y.wrapping_add(1)),
+                    Opcode::JMP => {
+                        let target = self.read_address(opcode.parameter_1);
+                        self.pc = target;
+                    }
+                    Opcode::JSR => {
+                        let target = self.read_address(opcode.parameter_1);
+                        self.pc = self.pc.wrapping_sub(1);
+                        self.push_pc();
+                        self.pc = target;
+                    }
+                    Opcode::LDA => {
+                        let op = self.read_operand(opcode.parameter_1);
+                        self.set_a(op);
+                    }
+                    Opcode::LDX => {
+                        let op = self.read_operand(opcode.parameter_1);
+                        self.set_x(op);
+                    }
+                    Opcode::LDY => {
+                        let op = self.read_operand(opcode.parameter_1);
+                        self.set_y(op);
+                    }
+                    Opcode::LSR => {
+                        if opcode.parameter_1 == AddressingMode::Accumulator {
+                            let m = self.a;
+                            self.set_a(m >> 1);
+                            self.p.set_carry((m & 0b1) != 0);
+                        } else {
+                            let addr = self.read_address(opcode.parameter_1);
+                            let m = self.memory.read_u8(addr);
+                            let value = m >> 1;
+                            self.memory.write_u8(addr, value);
+                            self.update_nz_flags(value);
+                            self.p.set_carry((m & 0b1) != 0);
+                        }
+                    }
+                    Opcode::NOP => {}
+                    Opcode::ORA => {
+                        let m = self.read_operand(opcode.parameter_1);
+                        self.set_a(self.a | m);
+                    }
+                    Opcode::PHA => self.push(self.a),
+                    Opcode::PHP => {
+                        self.p.set_brk_command(true);
+                        self.push_flags();
+                    }
+                    Opcode::PHX => self.push(self.x),
+                    Opcode::PHY => self.push(self.y),
+                    Opcode::PLA => {
+                        let value = self.pop();
+                        self.set_a(value);
+                    }
+                    Opcode::PLP => self.pop_flags(),
+                    Opcode::PLX => {
+                        let value = self.pop();
+                        self.set_x(value);
+                    }
+                    Opcode::PLY => {
+                        let value = self.pop();
+                        self.set_y(value);
+                    }
+                    Opcode::RMB0 => self.rmb(0),
+                    Opcode::RMB1 => self.rmb(1),
+                    Opcode::RMB2 => self.rmb(2),
+                    Opcode::RMB3 => self.rmb(3),
+                    Opcode::RMB4 => self.rmb(4),
+                    Opcode::RMB5 => self.rmb(5),
+                    Opcode::RMB6 => self.rmb(6),
+                    Opcode::RMB7 => self.rmb(7),
+                    Opcode::ROL => {
+                        if opcode.parameter_1 == AddressingMode::Accumulator {
+                            let m = self.a;
+                            self.set_a((m << 1) | self.p.carry() as u8);
+                            self.p.set_carry((m & 0x80) != 0);
+                        } else {
+                            let addr = self.read_address(opcode.parameter_1);
+                            let m = self.memory.read_u8(addr);
+                            let value = (m << 1) | self.p.carry() as u8;
+                            self.memory.write_u8(addr, value);
+                            self.update_nz_flags(value);
+                            self.p.set_carry((m & 0x80) != 0);
+                        }
+                    }
+                    Opcode::ROR => {
+                        if opcode.parameter_1 == AddressingMode::Accumulator {
+                            let m = self.a;
+                            self.set_a((m >> 1) | ((self.p.carry() as u8) << 7));
+                            self.p.set_carry((m & 0b1) != 0);
+                        } else {
+                            let addr = self.read_address(opcode.parameter_1);
+                            let m = self.memory.read_u8(addr);
+                            let value = (m >> 1) | ((self.p.carry() as u8) << 7);
+                            self.memory.write_u8(addr, value);
+                            self.update_nz_flags(value);
+                            self.p.set_carry((m & 0b1) != 0);
+                        }
+                    }
+                    Opcode::RTI => {
+                        self.pop_flags();
+                        self.pop_pc();
+                    }
+                    Opcode::RTS => {
+                        self.pop_pc();
+                        self.pc = self.pc.wrapping_add(1);
+                    }
+                    Opcode::SBC => {
+                        let m = self.read_operand(opcode.parameter_1);
+                        self.do_addition(!m);
+                    }
+                    Opcode::SEC => self.p.set_carry(true),
+                    Opcode::SED => self.p.set_decimal_mode(true),
+                    Opcode::SEI => self.p.set_irqb_disable(true),
+                    Opcode::SMB0 => self.smb(0),
+                    Opcode::SMB1 => self.smb(1),
+                    Opcode::SMB2 => self.smb(2),
+                    Opcode::SMB3 => self.smb(3),
+                    Opcode::SMB4 => self.smb(4),
+                    Opcode::SMB5 => self.smb(5),
+                    Opcode::SMB6 => self.smb(6),
+                    Opcode::SMB7 => self.smb(7),
+                    Opcode::STA => {
+                        let addr = self.read_address(opcode.parameter_1);
+                        self.memory.write_u8(addr, self.a);
+                    }
+                    Opcode::STP => self.run = false,
+                    Opcode::STX => {
+                        let addr = self.read_address(opcode.parameter_1);
+                        self.memory.write_u8(addr, self.x);
+                    }
+                    Opcode::STY => {
+                        let addr = self.read_address(opcode.parameter_1);
+                        self.memory.write_u8(addr, self.y);
+                    }
+                    Opcode::STZ => {
+                        let addr = self.read_address(opcode.parameter_1);
+                        self.memory.write_u8(addr, 0);
+                    }
+                    Opcode::TAX => self.set_x(self.a),
+                    Opcode::TAY => self.set_y(self.a),
+                    Opcode::TRB => {
+                        let addr = self.read_address(opcode.parameter_1);
+                        let a = self.a;
+                        let m = self.memory.read_u8(addr);
+                        self.memory.write_u8(addr, m & !a);
+                        self.p.set_zero((m & a) != 0);
+                    }
+                    Opcode::TSB => {
+                        let addr = self.read_address(opcode.parameter_1);
+                        let a = self.a;
+                        let m = self.memory.read_u8(addr);
+                        self.memory.write_u8(addr, m | a);
+                        self.p.set_zero((m & a) != 0);
+                    }
+                    Opcode::TSX => self.set_x(self.s),
+                    Opcode::TXA => self.set_a(self.x),
+                    Opcode::TXS => self.s = self.x,
+                    Opcode::TYA => self.set_a(self.y),
+                    Opcode::WAI => self.wai = true,
+                }
+            } else {
+                // NOP
+            }
         }
 
-        let pc = self.pc;
-        let opcode = get_instruction(self.read_u8_inc_pc());
-        if let Some(opcode) = opcode {
-            trace!("Executing opcode 0x{pc:04X} {opcode:?}");
-            match opcode.opcode {
-                Opcode::ADC => {
-                    let m = self.read_operand(opcode.parameter_1);
-                    self.do_addition(m);
-                }
-                Opcode::AND => {
-                    let m = self.read_operand(opcode.parameter_1);
-                    self.set_a(self.a & m);
-                }
-                Opcode::ASL => {
-                    if opcode.parameter_1 == AddressingMode::Accumulator {
-                        let m = self.a;
-                        self.set_a(m << 1);
-                        self.p.set_carry((m & 0x80) != 0);
-                    } else {
-                        let addr = self.read_address(opcode.parameter_1);
-                        let m = self.memory.read_u8(addr);
-                        let value = m << 1;
-                        self.memory.write_u8(addr, value);
-                        self.update_nz_flags(value);
-                        self.p.set_carry((m & 0x80) != 0);
-                    }
-                }
-                Opcode::BBR0 => self.bbr(0),
-                Opcode::BBR1 => self.bbr(1),
-                Opcode::BBR2 => self.bbr(2),
-                Opcode::BBR3 => self.bbr(3),
-                Opcode::BBR4 => self.bbr(4),
-                Opcode::BBR6 => self.bbr(5),
-                Opcode::BBR5 => self.bbr(6),
-                Opcode::BBR7 => self.bbr(7),
-                Opcode::BBS0 => self.bbs(0),
-                Opcode::BBS1 => self.bbs(1),
-                Opcode::BBS2 => self.bbs(2),
-                Opcode::BBS3 => self.bbs(3),
-                Opcode::BBS4 => self.bbs(4),
-                Opcode::BBS6 => self.bbs(5),
-                Opcode::BBS5 => self.bbs(6),
-                Opcode::BBS7 => self.bbs(7),
-                Opcode::BCC => self.branch(!self.p.carry()),
-                Opcode::BCS => self.branch(self.p.carry()),
-                Opcode::BEQ => self.branch(self.p.zero()),
-                Opcode::BIT => {
-                    let m = self.read_operand(opcode.parameter_1);
-                    self.p.set_zero((self.a & m) == 0);
-                    if opcode.parameter_1 != AddressingMode::Immediate {
-                        // N and V are only touched when not in immediate mode
-                        self.p.set_negative((m & 0x80) != 0);
-                        self.p.set_overflow((m & 0x40) != 0);
-                    }
-                }
-                Opcode::BMI => self.branch(self.p.negative()),
-                Opcode::BNE => self.branch(!self.p.zero()),
-                Opcode::BPL => self.branch(!self.p.negative()),
-                Opcode::BRA => self.branch(true),
-                Opcode::BRK => {
-                    self.pc = self.pc.wrapping_add(1); // skip unused 2nd instruction byte
-                    self.brk = true;
-                }
-                Opcode::BVC => self.branch(!self.p.overflow()),
-                Opcode::BVS => self.branch(self.p.overflow()),
-                Opcode::CLC => self.p.set_carry(false),
-                Opcode::CLD => self.p.set_decimal_mode(false),
-                Opcode::CLI => self.p.set_irqb_disable(false),
-                Opcode::CLV => self.p.set_overflow(false),
-                Opcode::CMP => self.cmp(self.a, opcode.parameter_1),
-                Opcode::CPX => self.cmp(self.x, opcode.parameter_1),
-                Opcode::CPY => self.cmp(self.y, opcode.parameter_1),
-                Opcode::DEC => {
-                    if opcode.parameter_1 == AddressingMode::Accumulator {
-                        self.set_a(self.a.wrapping_sub(1));
-                    } else {
-                        let addr = self.read_address(opcode.parameter_1);
-                        let value = self.memory.read_u8(addr);
-                        let new_value = value.wrapping_sub(1);
-                        self.memory.write_u8(addr, new_value);
-                        self.update_nz_flags(new_value);
-                    }
-                }
-                Opcode::DEX => self.set_x(self.x.wrapping_sub(1)),
-                Opcode::DEY => self.set_y(self.y.wrapping_sub(1)),
-                Opcode::EOR => {
-                    let m = self.read_operand(opcode.parameter_1);
-                    self.set_a(self.a ^ m);
-                }
-                Opcode::INC => {
-                    if opcode.parameter_1 == AddressingMode::Accumulator {
-                        self.set_a(self.a.wrapping_add(1));
-                    } else {
-                        let addr = self.read_address(opcode.parameter_1);
-                        let value = self.memory.read_u8(addr);
-                        let new_value = value.wrapping_add(1);
-                        self.memory.write_u8(addr, new_value);
-                        self.update_nz_flags(new_value);
-                    }
-                }
-                Opcode::INX => self.set_x(self.x.wrapping_add(1)),
-                Opcode::INY => self.set_y(self.y.wrapping_add(1)),
-                Opcode::JMP => {
-                    let target = self.read_address(opcode.parameter_1);
-                    self.pc = target;
-                }
-                Opcode::JSR => {
-                    let target = self.read_address(opcode.parameter_1);
-                    self.pc = self.pc.wrapping_sub(1);
-                    self.push_pc();
-                    self.pc = target;
-                }
-                Opcode::LDA => {
-                    let op = self.read_operand(opcode.parameter_1);
-                    self.set_a(op);
-                }
-                Opcode::LDX => {
-                    let op = self.read_operand(opcode.parameter_1);
-                    self.set_x(op);
-                }
-                Opcode::LDY => {
-                    let op = self.read_operand(opcode.parameter_1);
-                    self.set_y(op);
-                }
-                Opcode::LSR => {
-                    if opcode.parameter_1 == AddressingMode::Accumulator {
-                        let m = self.a;
-                        self.set_a(m >> 1);
-                        self.p.set_carry((m & 0b1) != 0);
-                    } else {
-                        let addr = self.read_address(opcode.parameter_1);
-                        let m = self.memory.read_u8(addr);
-                        let value = m >> 1;
-                        self.memory.write_u8(addr, value);
-                        self.update_nz_flags(value);
-                        self.p.set_carry((m & 0b1) != 0);
-                    }
-                }
-                Opcode::NOP => {}
-                Opcode::ORA => {
-                    let m = self.read_operand(opcode.parameter_1);
-                    self.set_a(self.a | m);
-                }
-                Opcode::PHA => self.push(self.a),
-                Opcode::PHP => {
-                    self.p.set_brk_command(true);
-                    self.push_flags();
-                }
-                Opcode::PHX => self.push(self.x),
-                Opcode::PHY => self.push(self.y),
-                Opcode::PLA => {
-                    let value = self.pop();
-                    self.set_a(value);
-                }
-                Opcode::PLP => self.pop_flags(),
-                Opcode::PLX => {
-                    let value = self.pop();
-                    self.set_x(value);
-                }
-                Opcode::PLY => {
-                    let value = self.pop();
-                    self.set_y(value);
-                }
-                Opcode::RMB0 => self.rmb(0),
-                Opcode::RMB1 => self.rmb(1),
-                Opcode::RMB2 => self.rmb(2),
-                Opcode::RMB3 => self.rmb(3),
-                Opcode::RMB4 => self.rmb(4),
-                Opcode::RMB5 => self.rmb(5),
-                Opcode::RMB6 => self.rmb(6),
-                Opcode::RMB7 => self.rmb(7),
-                Opcode::ROL => {
-                    if opcode.parameter_1 == AddressingMode::Accumulator {
-                        let m = self.a;
-                        self.set_a((m << 1) | self.p.carry() as u8);
-                        self.p.set_carry((m & 0x80) != 0);
-                    } else {
-                        let addr = self.read_address(opcode.parameter_1);
-                        let m = self.memory.read_u8(addr);
-                        let value = (m << 1) | self.p.carry() as u8;
-                        self.memory.write_u8(addr, value);
-                        self.update_nz_flags(value);
-                        self.p.set_carry((m & 0x80) != 0);
-                    }
-                }
-                Opcode::ROR => {
-                    if opcode.parameter_1 == AddressingMode::Accumulator {
-                        let m = self.a;
-                        self.set_a((m >> 1) | ((self.p.carry() as u8) << 7));
-                        self.p.set_carry((m & 0b1) != 0);
-                    } else {
-                        let addr = self.read_address(opcode.parameter_1);
-                        let m = self.memory.read_u8(addr);
-                        let value = (m >> 1) | ((self.p.carry() as u8) << 7);
-                        self.memory.write_u8(addr, value);
-                        self.update_nz_flags(value);
-                        self.p.set_carry((m & 0b1) != 0);
-                    }
-                }
-                Opcode::RTI => {
-                    self.pop_flags();
-                    self.pop_pc();
-                }
-                Opcode::RTS => {
-                    self.pop_pc();
-                    self.pc = self.pc.wrapping_add(1);
-                }
-                Opcode::SBC => {
-                    let m = self.read_operand(opcode.parameter_1);
-                    self.do_addition(!m);
-                }
-                Opcode::SEC => self.p.set_carry(true),
-                Opcode::SED => self.p.set_decimal_mode(true),
-                Opcode::SEI => self.p.set_irqb_disable(true),
-                Opcode::SMB0 => self.smb(0),
-                Opcode::SMB1 => self.smb(1),
-                Opcode::SMB2 => self.smb(2),
-                Opcode::SMB3 => self.smb(3),
-                Opcode::SMB4 => self.smb(4),
-                Opcode::SMB5 => self.smb(5),
-                Opcode::SMB6 => self.smb(6),
-                Opcode::SMB7 => self.smb(7),
-                Opcode::STA => {
-                    let addr = self.read_address(opcode.parameter_1);
-                    self.memory.write_u8(addr, self.a);
-                }
-                Opcode::STP => self.run = false,
-                Opcode::STX => {
-                    let addr = self.read_address(opcode.parameter_1);
-                    self.memory.write_u8(addr, self.x);
-                }
-                Opcode::STY => {
-                    let addr = self.read_address(opcode.parameter_1);
-                    self.memory.write_u8(addr, self.y);
-                }
-                Opcode::STZ => {
-                    let addr = self.read_address(opcode.parameter_1);
-                    self.memory.write_u8(addr, 0);
-                }
-                Opcode::TAX => self.set_x(self.a),
-                Opcode::TAY => self.set_y(self.a),
-                Opcode::TRB => {
-                    let addr = self.read_address(opcode.parameter_1);
-                    let a = self.a;
-                    let m = self.memory.read_u8(addr);
-                    self.memory.write_u8(addr, m & !a);
-                    self.p.set_zero((m & a) != 0);
-                }
-                Opcode::TSB => {
-                    let addr = self.read_address(opcode.parameter_1);
-                    let a = self.a;
-                    let m = self.memory.read_u8(addr);
-                    self.memory.write_u8(addr, m | a);
-                    self.p.set_zero((m & a) != 0);
-                }
-                Opcode::TSX => self.set_x(self.s),
-                Opcode::TXA => self.set_a(self.x),
-                Opcode::TXS => self.s = self.x,
-                Opcode::TYA => self.set_a(self.y),
-                Opcode::WAI => self.wai = true,
-            }
-        } else {
-            // NOP
+        self.memory.on_cycle();
+        if self.instruction_finished() {
+            self.memory.on_instruction_finished();
         }
     }
 

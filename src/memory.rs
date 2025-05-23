@@ -19,6 +19,10 @@ pub trait Memory {
         self.write_u8(address, l);
         self.write_u8(address.wrapping_add(1), h);
     }
+
+    fn on_cycle(&mut self) {}
+
+    fn on_instruction_finished(&mut self) {}
 }
 
 impl<M: Memory> Memory for Arc<Mutex<M>> {
@@ -165,5 +169,15 @@ impl<M: Memory> Memory for MappedMemory<M> {
             }
         }
         self.base.write_u8(address, value);
+    }
+
+    fn on_cycle(&mut self) {
+        self.devices.iter_mut().for_each(|d| d.on_cycle());
+    }
+
+    fn on_instruction_finished(&mut self) {
+        self.devices
+            .iter_mut()
+            .for_each(|d| d.on_instruction_finished());
     }
 }
