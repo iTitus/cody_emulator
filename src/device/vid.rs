@@ -1,3 +1,4 @@
+use crate::cpu;
 use crate::cpu::Cpu;
 use crate::device::via::Via;
 use crate::interrupt::{InterruptTrigger, SimpleInterruptProvider};
@@ -881,15 +882,15 @@ pub fn start(
 
     if let Some(reset_vector) = reset_vector.or(if cartridge { Some(load_address) } else { None }) {
         info!("Setting reset vector to 0x{reset_vector:04X}");
-        memory.write_u16(0xFFFC, reset_vector);
+        memory.write_u16(cpu::RESET_VECTOR, reset_vector);
     }
     if let Some(irq_vector) = irq_vector {
         info!("Setting irq vector to 0x{irq_vector:04X}");
-        memory.write_u16(0xFFFE, irq_vector);
+        memory.write_u16(cpu::IRQ_VECTOR, irq_vector);
     }
     if let Some(nmi_vector) = nmi_vector {
         info!("Setting nmi vector to 0x{nmi_vector:04X}");
-        memory.write_u16(0xFFFA, nmi_vector);
+        memory.write_u16(cpu::NMI_VECTOR, nmi_vector);
     }
 
     let memory = Arc::new(Mutex::new(MappedMemory::from_memory(memory)));

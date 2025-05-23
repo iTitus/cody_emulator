@@ -1,3 +1,4 @@
+use crate::cpu;
 use crate::device::MemoryDevice;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -123,7 +124,7 @@ impl Sparse {
             memory: data[..data.len().min(Self::MAX_LEN)].into(),
             ..Default::default()
         };
-        m.write_u16(0xFFFC, 0x0200);
+        m.write_u16(cpu::RESET_VECTOR, 0x0200);
         m
     }
 }

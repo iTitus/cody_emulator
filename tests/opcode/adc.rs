@@ -1,4 +1,5 @@
 use cody_emulator::assembler::{MnemonicDSL, Parameter, assemble};
+use cody_emulator::cpu;
 use cody_emulator::cpu::Cpu;
 use cody_emulator::interrupt::NoopInterruptProvider;
 use cody_emulator::memory::{Memory, Sparse};
@@ -11,7 +12,7 @@ fn adc_check_immediates(a: u8, b: u8, carry: bool) {
     ];
     let mut memory = Sparse::default();
     assemble(&program, &mut memory.memory).unwrap();
-    memory.write_u16(0xFFFC, 0x0200);
+    memory.write_u16(cpu::RESET_VECTOR, 0x0200);
     let mut cpu = Cpu::new(memory, NoopInterruptProvider);
     cpu.a = a;
     cpu.p.set_carry(carry);

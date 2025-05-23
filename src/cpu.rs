@@ -1,8 +1,13 @@
 use crate::interrupt::InterruptProvider;
 use crate::memory::Memory;
-use crate::opcode::{get_instruction, AddressingMode, Opcode};
+use crate::opcode::{AddressingMode, Opcode, get_instruction};
 use bitfields::bitfield;
 use log::trace;
+
+pub const INITIAL_STACK_POINTER: u8 = 0xFD;
+pub const NMI_VECTOR: u16 = 0xFFFA;
+pub const RESET_VECTOR: u16 = 0xFFFC;
+pub const IRQ_VECTOR: u16 = 0xFFFE;
 
 #[bitfield(u8)]
 #[derive(Copy, Clone)]
@@ -76,9 +81,9 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
         self.a = 0;
         self.x = 0;
         self.y = 0;
-        self.s = 0xFD;
+        self.s = INITIAL_STACK_POINTER;
         self.p = Status::default();
-        self.pc = self.memory.read_u16(0xFFFC);
+        self.pc = self.memory.read_u16(RESET_VECTOR);
         self.brk = false;
         self.irq = false;
         self.nmi = false;
@@ -124,7 +129,7 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
             self.push_flags();
             self.p.set_irqb_disable(true);
             self.p.set_decimal_mode(false);
-            self.pc = self.memory.read_u16(0xFFFE);
+            self.pc = self.memory.read_u16(IRQ_VECTOR);
         }
         if self.irq {
             self.irq = false;
@@ -135,7 +140,7 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
                 self.push_flags();
                 self.p.set_irqb_disable(true);
                 self.p.set_decimal_mode(false);
-                self.pc = self.memory.read_u16(0xFFFE);
+                self.pc = self.memory.read_u16(IRQ_VECTOR);
             }
         }
         if self.nmi {
@@ -146,7 +151,7 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
             self.push_flags();
             self.p.set_irqb_disable(true);
             self.p.set_decimal_mode(false);
-            self.pc = self.memory.read_u16(0xFFFA);
+            self.pc = self.memory.read_u16(NMI_VECTOR);
         }
         if self.wai {
             return; // busy looping

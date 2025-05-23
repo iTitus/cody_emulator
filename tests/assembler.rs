@@ -1,4 +1,5 @@
 use cody_emulator::assembler::{MnemonicDSL, Parameter, assemble};
+use cody_emulator::cpu;
 use cody_emulator::cpu::Cpu;
 use cody_emulator::interrupt::NoopInterruptProvider;
 use cody_emulator::memory::{Memory, Sparse};
@@ -16,7 +17,7 @@ pub fn test_assemble_labels_1() {
     ];
     let mut memory = Sparse::default();
     assemble(&program, &mut memory.memory).unwrap();
-    memory.write_u16(0xFFFC, 0x0200);
+    memory.write_u16(cpu::RESET_VECTOR, 0x0200);
     let mut cpu = Cpu::new(memory, NoopInterruptProvider);
     cpu.run();
 
@@ -35,7 +36,7 @@ pub fn test_assemble_labels_2() {
     ];
     let mut memory = Sparse::default();
     assemble(&program, &mut memory.memory).unwrap();
-    memory.write_u16(0xFFFC, 0x0200);
+    memory.write_u16(cpu::RESET_VECTOR, 0x0200);
     let mut cpu = Cpu::new(memory, NoopInterruptProvider);
     cpu.run();
 
@@ -59,7 +60,7 @@ pub fn test_assemble_bbs_labels() {
     ];
     let mut memory = Sparse::default();
     assemble(&program, &mut memory.memory).unwrap();
-    memory.write_u16(0xFFFC, 0x0200);
+    memory.write_u16(cpu::RESET_VECTOR, 0x0200);
     let mut cpu = Cpu::new(memory, NoopInterruptProvider);
     cpu.run();
 
