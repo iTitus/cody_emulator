@@ -97,7 +97,7 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
     pub fn step_instruction(&mut self) {
         loop {
             self.step_cycle();
-            if self.instruction_finished() {
+            if !self.run || self.instruction_finished() {
                 break;
             }
         }
@@ -383,9 +383,7 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
                     let addr = self.read_address(opcode.parameter_1);
                     self.memory.write_u8(addr, self.a);
                 }
-                Opcode::STP => {
-                    self.run = false;
-                }
+                Opcode::STP => self.run = false,
                 Opcode::STX => {
                     let addr = self.read_address(opcode.parameter_1);
                     self.memory.write_u8(addr, self.x);
