@@ -3,12 +3,12 @@ name = "cody_emulator"
 version = "0.1.0"
 authors = ["iTitus"]
 edition = "2024"
-rust-version = "1.87"
+rust-version = "1.88"
 repository = "https://github.com/iTitus/cody_emulator"
 license = "MIT"
 
 [dependencies]
-bitfields = "0.13"
+bitfields = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 clap-num = "1.2"
 env_logger = "0.11"
@@ -22,5 +22,5 @@ thiserror = "2"
 bytemuck = { version = "1.23", features = ["latest_stable_rust"] }
 glam = { version = "0.30", features = ["bytemuck"] }
 pollster = "0.4"
-wgpu = "25.0"
+wgpu = "26.0"
 winit = "0.30"
