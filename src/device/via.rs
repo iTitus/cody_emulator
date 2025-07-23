@@ -41,7 +41,7 @@ impl Via {
     fn read_iora(&mut self) -> u8 {
         let ddr = self.registers[3];
         let ior = self.registers[1];
-        assert_eq!(ddr, 0x7); // TODO: only works for cody right now
+        assert_eq!(ddr, 0x7, "when reading IORA only DDRA = 0x7 is supported, but was {ddr:#x}"); // TODO: only works for cody right now
         let output = ior & ddr;
         self.key_state[output as usize] | output
     }
