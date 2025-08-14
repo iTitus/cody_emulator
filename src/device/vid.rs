@@ -839,7 +839,7 @@ pub fn start(
             .checked_sub(cartridge_load_address as usize)
             .and_then(|len| len.checked_add(1))
             .expect("cartridge start address must be <= end address");
-        assert!(data.len() - 4 >= len);
+        assert!(data.len() - 4 >= len, "cartridge data len {} must be >= implied header len {len}", data.len() - 4);
 
         data = data.drain(4..(len + 4)).collect();
         load_address = load_address.or(Some(cartridge_load_address));
