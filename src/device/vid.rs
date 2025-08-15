@@ -135,7 +135,6 @@ struct State {
     device: wgpu::Device,
     queue: wgpu::Queue,
     size: winit::dpi::PhysicalSize<u32>,
-    surface: wgpu::Surface<'static>,
     surface_format: wgpu::TextureFormat,
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
@@ -146,6 +145,8 @@ struct State {
     uniform: Uniform,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
+    /// must be last to stop a segfault on wayland
+    surface: wgpu::Surface<'static>,
 }
 
 impl State {
