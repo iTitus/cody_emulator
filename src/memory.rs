@@ -2,6 +2,7 @@ use crate::cpu;
 use crate::device::MemoryDevice;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
+use log::debug;
 
 pub trait Memory {
     fn read_u8(&mut self, address: u16) -> u8;
@@ -19,10 +20,6 @@ pub trait Memory {
         self.write_u8(address, l);
         self.write_u8(address.wrapping_add(1), h);
     }
-
-    fn on_cycle(&mut self) {}
-
-    fn on_instruction_finished(&mut self) {}
 }
 
 impl<M: Memory> Memory for Arc<Mutex<M>> {
@@ -30,8 +27,16 @@ impl<M: Memory> Memory for Arc<Mutex<M>> {
         self.lock().unwrap().read_u8(address)
     }
 
+    fn read_u16(&mut self, address: u16) -> u16 {
+        self.lock().unwrap().read_u16(address)
+    }
+
     fn write_u8(&mut self, address: u16, value: u8) {
         self.lock().unwrap().write_u8(address, value);
+    }
+
+    fn write_u16(&mut self, address: u16, value: u16) {
+        self.lock().unwrap().write_u16(address, value);
     }
 }
 
@@ -154,30 +159,28 @@ impl<M: Memory> MappedMemory<M> {
 
 impl<M: Memory> Memory for MappedMemory<M> {
     fn read_u8(&mut self, address: u16) -> u8 {
-        for device in &mut self.devices {
-            if let Some(value) = device.read(address) {
-                return value;
+        if (0x9F00..0xE000).contains(&address) {
+            for device in &mut self.devices {
+                if let Some(value) = device.read(address) {
+                    return value;
+                }
             }
         }
         self.base.read_u8(address)
     }
 
     fn write_u8(&mut self, address: u16, value: u8) {
-        for device in &mut self.devices {
-            if device.write(address, value).is_some() {
-                return;
+        if (0xE000..=0xFFFF).contains(&address) {
+            // ROM
+            debug!("Trying to write to ROM at address 0x{address:04X}, ignoring");
+            return;
+        } else if (0x9F00..0xE000).contains(&address) {
+            for device in &mut self.devices {
+                if device.write(address, value).is_some() {
+                    return;
+                }
             }
         }
         self.base.write_u8(address, value);
-    }
-
-    fn on_cycle(&mut self) {
-        self.devices.iter_mut().for_each(|d| d.on_cycle());
-    }
-
-    fn on_instruction_finished(&mut self) {
-        self.devices
-            .iter_mut()
-            .for_each(|d| d.on_instruction_finished());
     }
 }

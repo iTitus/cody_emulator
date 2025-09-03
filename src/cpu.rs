@@ -419,11 +419,6 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
                 // NOP
             }
         }
-
-        self.memory.on_cycle();
-        if self.instruction_finished() {
-            self.memory.on_instruction_finished();
-        }
     }
 
     fn read_u8_inc_pc(&mut self) -> u8 {

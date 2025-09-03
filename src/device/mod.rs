@@ -8,10 +8,6 @@ pub trait MemoryDevice {
     fn read(&mut self, address: u16) -> Option<u8>;
 
     fn write(&mut self, address: u16, value: u8) -> Option<()>;
-
-    fn on_cycle(&mut self) {}
-
-    fn on_instruction_finished(&mut self) {}
 }
 
 impl<M: MemoryDevice> MemoryDevice for Arc<Mutex<M>> {
@@ -21,13 +17,5 @@ impl<M: MemoryDevice> MemoryDevice for Arc<Mutex<M>> {
 
     fn write(&mut self, address: u16, value: u8) -> Option<()> {
         self.lock().unwrap().write(address, value)
-    }
-
-    fn on_cycle(&mut self) {
-        self.lock().unwrap().on_cycle()
-    }
-
-    fn on_instruction_finished(&mut self) {
-        self.lock().unwrap().on_instruction_finished()
     }
 }

@@ -1,6 +1,6 @@
 use crate::cpu;
 use crate::cpu::Cpu;
-use crate::device::uart::{UART1_BASE, UART2_BASE, Uart};
+use crate::device::uart::{Uart, UART1_BASE};
 use crate::device::via::Via;
 use crate::interrupt::{InterruptTrigger, SimpleInterruptProvider};
 use crate::memory::{Contiguous, MappedMemory, Memory};
@@ -740,8 +740,6 @@ struct App<M> {
     state: Option<State>,
     memory: Arc<Mutex<M>>,
     via_device: Arc<Mutex<Via>>,
-    uart1_device: Arc<Mutex<Uart>>,
-    uart2_device: Arc<Mutex<Uart>>,
     last_frame: Option<Instant>,
 }
 
@@ -909,8 +907,8 @@ pub fn start(
     memory.lock().unwrap().add_device(Arc::clone(&via_device));
     let uart1_device = Arc::new(Mutex::new(Uart::new(UART1_BASE)));
     memory.lock().unwrap().add_device(Arc::clone(&uart1_device));
-    let uart2_device = Arc::new(Mutex::new(Uart::new(UART2_BASE)));
-    memory.lock().unwrap().add_device(Arc::clone(&uart2_device));
+    // TODO: let uart2_device = Arc::new(Mutex::new(Uart::new(UART2_BASE)));
+    // memory.lock().unwrap().add_device(Arc::clone(&uart2_device));
 
     let interrupt_provider = Arc::new(Mutex::new(SimpleInterruptProvider::default()));
     {
@@ -949,9 +947,10 @@ pub fn start(
             VecDeque::new()
         };
         let source_size = uart1_source.len();
+        info!("Starting UART thread");
         thread::spawn(move || {
             loop {
-                thread::sleep(Duration::from_secs_f64(1.0 / 19200.0));
+                thread::sleep(Duration::from_secs_f64(7.0 / 19200.0));
                 let mut uart1 = uart1.lock().unwrap();
                 uart1.update_state();
                 if uart1.is_enabled() {
@@ -997,8 +996,6 @@ pub fn start(
         state: None,
         memory,
         via_device,
-        uart1_device,
-        uart2_device,
         last_frame: None,
     };
     event_loop.run_app(&mut app).unwrap();
