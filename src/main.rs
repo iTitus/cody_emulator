@@ -31,6 +31,10 @@ struct Cli {
     #[arg(long, value_parser=maybe_hex::<u16>)]
     nmi_vector: Option<u16>,
 
+    /// Path of file used to fill the UART1 receive buffer
+    #[arg(long)]
+    uart1_source: Option<PathBuf>,
+
     /// Each time this option is added increases the default logging level
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -60,6 +64,7 @@ pub fn main() {
         cli.reset_vector,
         cli.irq_vector,
         cli.nmi_vector,
+        cli.uart1_source.as_deref(),
     );
     /*let mut f = File::open("codybasic.bin").unwrap();
     let mut data = vec![];

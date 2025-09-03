@@ -1,12 +1,14 @@
 use crate::cpu;
 use crate::cpu::Cpu;
+use crate::device::uart::{UART1_BASE, UART2_BASE, Uart};
 use crate::device::via::Via;
 use crate::interrupt::{InterruptTrigger, SimpleInterruptProvider};
 use crate::memory::{Contiguous, MappedMemory, Memory};
 use glam::{Mat4, Quat, Vec2, Vec3};
-use log::info;
+use log::{info, trace};
+use std::collections::VecDeque;
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::mem::offset_of;
 use std::ops::DerefMut;
 use std::path::Path;
@@ -738,6 +740,8 @@ struct App<M> {
     state: Option<State>,
     memory: Arc<Mutex<M>>,
     via_device: Arc<Mutex<Via>>,
+    uart1_device: Arc<Mutex<Uart>>,
+    uart2_device: Arc<Mutex<Uart>>,
     last_frame: Option<Instant>,
 }
 
@@ -814,6 +818,7 @@ pub fn start(
     reset_vector: Option<u16>,
     irq_vector: Option<u16>,
     nmi_vector: Option<u16>,
+    uart1_source: Option<impl AsRef<Path>>,
 ) {
     info!(
         "Loading binary {}{}",
@@ -840,7 +845,11 @@ pub fn start(
             .checked_sub(cartridge_load_address as usize)
             .and_then(|len| len.checked_add(1))
             .expect("cartridge start address must be <= end address");
-        assert!(data.len() - 4 >= len, "cartridge data len {} must be >= implied header len {len}", data.len() - 4);
+        assert!(
+            data.len() - 4 >= len,
+            "cartridge data len {} must be >= implied header len {len}",
+            data.len() - 4
+        );
 
         data = data.drain(4..(len + 4)).collect();
         load_address = load_address.or(Some(cartridge_load_address));
@@ -898,23 +907,76 @@ pub fn start(
     let memory = Arc::new(Mutex::new(MappedMemory::from_memory(memory)));
     let via_device = Arc::new(Mutex::new(Via::default()));
     memory.lock().unwrap().add_device(Arc::clone(&via_device));
+    let uart1_device = Arc::new(Mutex::new(Uart::new(UART1_BASE)));
+    memory.lock().unwrap().add_device(Arc::clone(&uart1_device));
+    let uart2_device = Arc::new(Mutex::new(Uart::new(UART2_BASE)));
+    memory.lock().unwrap().add_device(Arc::clone(&uart2_device));
 
     let interrupt_provider = Arc::new(Mutex::new(SimpleInterruptProvider::default()));
-    let mut cpu = Cpu::new(Arc::clone(&memory), Arc::clone(&interrupt_provider));
-    info!("Starting cpu");
-    thread::spawn(move || {
-        cpu.run();
-    });
+    {
+        let mut cpu = Cpu::new(Arc::clone(&memory), Arc::clone(&interrupt_provider));
+        info!("Starting cpu");
+        thread::spawn(move || {
+            cpu.run();
+        });
+    }
 
-    // TODO: make this use the VIA registers for configuration
-    info!("Starting interrupt timer");
-    let mut interrupt_trigger = Arc::clone(&interrupt_provider);
-    thread::spawn(move || {
-        loop {
-            thread::sleep(std::time::Duration::from_secs_f64(1.0 / 60.0));
-            interrupt_trigger.trigger_irq();
-        }
-    });
+    {
+        // TODO: make this use the VIA registers for configuration
+        info!("Starting interrupt timer");
+        let mut interrupt_trigger = Arc::clone(&interrupt_provider);
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_secs_f64(1.0 / 60.0));
+                interrupt_trigger.trigger_irq();
+            }
+        });
+    }
+
+    {
+        // TODO: better UART support
+        let uart1 = Arc::clone(&uart1_device);
+        let mut uart1_source: VecDeque<u8> = if let Some(path) = uart1_source {
+            let f = File::open(path.as_ref()).unwrap();
+            let r = BufReader::new(f);
+            let mut data = VecDeque::new();
+            for l in r.lines().map_while(Result::ok) {
+                data.extend(l.bytes());
+                data.push_back(b'\n');
+            }
+            data
+        } else {
+            VecDeque::new()
+        };
+        let source_size = uart1_source.len();
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_secs_f64(1.0 / 19200.0));
+                let mut uart1 = uart1.lock().unwrap();
+                uart1.update_state();
+                if uart1.is_enabled() {
+                    // transmit
+                    while uart1.transmit_buffer.pop().is_some() {
+                        // discard
+                    }
+
+                    // receive
+                    while !uart1.receive_buffer.is_full() {
+                        if let Some(value) = uart1_source.pop_front() {
+                            uart1.receive_buffer.push(value);
+                            trace!(
+                                "push byte {value}, remaining {}/{source_size}",
+                                uart1_source.len()
+                            )
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                drop(uart1);
+            }
+        });
+    }
 
     info!("Starting window event loop");
     let event_loop = EventLoop::new().unwrap();
@@ -935,6 +997,8 @@ pub fn start(
         state: None,
         memory,
         via_device,
+        uart1_device,
+        uart2_device,
         last_frame: None,
     };
     event_loop.run_app(&mut app).unwrap();

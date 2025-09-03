@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+pub mod uart;
 pub mod via;
 pub mod vid;
 
@@ -20,5 +21,13 @@ impl<M: MemoryDevice> MemoryDevice for Arc<Mutex<M>> {
 
     fn write(&mut self, address: u16, value: u8) -> Option<()> {
         self.lock().unwrap().write(address, value)
+    }
+
+    fn on_cycle(&mut self) {
+        self.lock().unwrap().on_cycle()
+    }
+
+    fn on_instruction_finished(&mut self) {
+        self.lock().unwrap().on_instruction_finished()
     }
 }
