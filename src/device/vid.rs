@@ -1,6 +1,6 @@
 use crate::cpu;
 use crate::cpu::Cpu;
-use crate::device::uart::{Uart, UART1_BASE};
+use crate::device::uart::{UART1_BASE, Uart};
 use crate::device::via::Via;
 use crate::interrupt::{InterruptTrigger, SimpleInterruptProvider};
 use crate::memory::{Contiguous, MappedMemory, Memory};

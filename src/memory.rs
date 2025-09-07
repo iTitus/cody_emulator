@@ -1,8 +1,8 @@
 use crate::cpu;
 use crate::device::MemoryDevice;
+use log::debug;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
-use log::debug;
 
 pub trait Memory {
     fn read_u8(&mut self, address: u16) -> u8;
