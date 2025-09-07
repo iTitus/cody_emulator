@@ -966,7 +966,8 @@ pub fn start(
                         if let Some(value) = uart1_source.pop_front() {
                             uart1.receive_buffer.push(value);
                             trace!(
-                                "push byte {value}, remaining {}/{source_size}",
+                                "push byte {:?} ({value}), remaining {}/{source_size}",
+                                value as char,
                                 uart1_source.len()
                             )
                         } else {
