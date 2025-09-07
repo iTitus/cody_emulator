@@ -955,8 +955,10 @@ pub fn start(
                 uart1.update_state();
                 if uart1.is_enabled() {
                     // transmit
-                    while uart1.transmit_buffer.pop().is_some() {
+                    while let Some(c) = uart1.transmit_buffer.pop() {
                         // discard
+                        let c = c as char;
+                        print!("{c}");
                     }
 
                     // receive
