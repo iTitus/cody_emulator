@@ -27,7 +27,7 @@ fn cmp_check_immediates(a: u8, b: u8) {
     // check NZC flags
     let z = a == b;
     let c = a >= b;
-    let n = (a as i8) < (b as i8);
+    let n = (a.wrapping_sub(b) & 0x80) != 0;
     assert_eq!(
         z,
         cpu.p.zero(),

@@ -570,8 +570,7 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
 
     fn cmp(&mut self, a: u8, addressing_mode: AddressingMode) {
         let m = self.read_operand(addressing_mode);
-        self.p.set_zero(a == m);
-        self.p.set_negative((a as i8) < (m as i8));
+        self.update_nz_flags(a.wrapping_sub(m));
         self.p.set_carry(a >= m);
     }
 
