@@ -8,7 +8,7 @@ use glam::{Mat4, Quat, Vec2, Vec3};
 use log::{info, trace};
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::mem::offset_of;
 use std::ops::DerefMut;
 use std::path::Path;
@@ -809,6 +809,7 @@ impl<M: Memory> ApplicationHandler for App<M> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn start(
     path: impl AsRef<Path>,
     cartridge: bool, // TODO: Option<impl AsRef<Path>>,
@@ -817,6 +818,7 @@ pub fn start(
     irq_vector: Option<u16>,
     nmi_vector: Option<u16>,
     uart1_source: Option<impl AsRef<Path>>,
+    fix_newlines: bool,
 ) {
     info!(
         "Loading binary {}{}",
@@ -935,10 +937,20 @@ pub fn start(
         // TODO: better UART support
         let uart1 = Arc::clone(&uart1_device);
         let mut uart1_source: VecDeque<u8> = if let Some(path) = uart1_source {
-            let mut f = File::open(path.as_ref()).unwrap();
-            let mut buf = vec![];
-            f.read_to_end(&mut buf).unwrap();
-            VecDeque::from(buf)
+            let f = File::open(path.as_ref()).unwrap();
+            let mut r = BufReader::new(f);
+            if fix_newlines {
+                let mut data = VecDeque::new();
+                for l in r.lines().map_while(Result::ok) {
+                    data.extend(l.bytes());
+                    data.push_back(b'\n');
+                }
+                data
+            } else {
+                let mut buf = vec![];
+                r.read_to_end(&mut buf).unwrap();
+                VecDeque::from(buf)
+            }
         } else {
             VecDeque::new()
         };

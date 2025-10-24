@@ -31,9 +31,15 @@ struct Cli {
     #[arg(long, value_parser=maybe_hex::<u16>)]
     nmi_vector: Option<u16>,
 
-    /// Path of file used to fill the UART1 receive buffer
+    /// Path of file used to fill the UART1 receive buffer with bytes
     #[arg(long)]
     uart1_source: Option<PathBuf>,
+
+    /// This option will normalize newlines when reading data for the UART.
+    ///
+    /// Use this when your input text file might have CRLF-style line endings.
+    #[arg(long, default_value_t = false)]
+    fix_newlines: bool,
 
     /// Each time this option is added increases the default logging level
     #[arg(short, long, action = clap::ArgAction::Count)]
@@ -65,11 +71,8 @@ pub fn main() {
         cli.irq_vector,
         cli.nmi_vector,
         cli.uart1_source.as_deref(),
+        cli.fix_newlines,
     );
-    /*let mut f = File::open("codybasic.bin").unwrap();
-    let mut data = vec![];
-    f.read_to_end(&mut data).unwrap();
-    dis(&data);*/
 }
 
 #[allow(dead_code)]
