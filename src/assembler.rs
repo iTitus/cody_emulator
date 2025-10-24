@@ -1,4 +1,4 @@
-use crate::opcode::{AddressingMode, InstructionMeta, Opcode, get_instructions};
+use crate::opcode::{get_instructions, AddressingMode, InstructionMeta, Opcode};
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -160,36 +160,34 @@ impl AssembledInstruction {
                 };
 
                 // zeropage optimizations (only for parameter_1)
-                if let Some(AssembledParameter::U16(number)) = parameter_1 {
-                    if (0..=u8::MAX as u16).contains(&number) {
-                        let mut zp_optimize =
-                            |abs_mode: AddressingMode, zp_mode: AddressingMode| {
-                                if mode_1 == abs_mode
-                                    && candidates.iter().any(|c| c.parameter_1 == zp_mode)
-                                {
-                                    mode_1 = zp_mode;
-                                    parameter_1 = Some(AssembledParameter::U8(number as u8));
-                                }
-                            };
+                if let Some(AssembledParameter::U16(number)) = parameter_1
+                    && (0..=u8::MAX as u16).contains(&number)
+                {
+                    let mut zp_optimize = |abs_mode: AddressingMode, zp_mode: AddressingMode| {
+                        if mode_1 == abs_mode && candidates.iter().any(|c| c.parameter_1 == zp_mode)
+                        {
+                            mode_1 = zp_mode;
+                            parameter_1 = Some(AssembledParameter::U8(number as u8));
+                        }
+                    };
 
-                        zp_optimize(AddressingMode::Absolute, AddressingMode::ZeroPage);
-                        zp_optimize(
-                            AddressingMode::AbsoluteIndexedX,
-                            AddressingMode::ZeroPageIndexedX,
-                        );
-                        zp_optimize(
-                            AddressingMode::AbsoluteIndexedY,
-                            AddressingMode::ZeroPageIndexedY,
-                        );
-                        zp_optimize(
-                            AddressingMode::AbsoluteIndirect,
-                            AddressingMode::ZeroPageIndirect,
-                        );
-                        zp_optimize(
-                            AddressingMode::AbsoluteIndexedIndirectX,
-                            AddressingMode::ZeroPageIndexedIndirectX,
-                        );
-                    }
+                    zp_optimize(AddressingMode::Absolute, AddressingMode::ZeroPage);
+                    zp_optimize(
+                        AddressingMode::AbsoluteIndexedX,
+                        AddressingMode::ZeroPageIndexedX,
+                    );
+                    zp_optimize(
+                        AddressingMode::AbsoluteIndexedY,
+                        AddressingMode::ZeroPageIndexedY,
+                    );
+                    zp_optimize(
+                        AddressingMode::AbsoluteIndirect,
+                        AddressingMode::ZeroPageIndirect,
+                    );
+                    zp_optimize(
+                        AddressingMode::AbsoluteIndexedIndirectX,
+                        AddressingMode::ZeroPageIndexedIndirectX,
+                    );
                 }
 
                 // special handling for labels
@@ -490,10 +488,10 @@ impl Assembly {
         // pass 1: find opcodes and offsets, collect params
         let mut address = 0u16;
         for instruction in &self.instructions {
-            if let Some(label) = &instruction.label {
-                if self.labels.insert(label.to_string(), address).is_some() {
-                    return Err(AssemblerError::DoubleLabel(label.to_string()));
-                }
+            if let Some(label) = &instruction.label
+                && self.labels.insert(label.to_string(), address).is_some()
+            {
+                return Err(AssemblerError::DoubleLabel(label.to_string()));
             }
 
             let assembled = AssembledInstruction::assemble(instruction)?;
