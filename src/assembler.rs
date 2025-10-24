@@ -1,4 +1,4 @@
-use crate::opcode::{get_instructions, AddressingMode, InstructionMeta, Opcode};
+use crate::opcode::{AddressingMode, InstructionMeta, Opcode, get_instructions};
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
