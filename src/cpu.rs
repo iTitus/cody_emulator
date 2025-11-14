@@ -1,6 +1,6 @@
 use crate::interrupt::InterruptProvider;
 use crate::memory::Memory;
-use crate::opcode::{AddressingMode, Opcode, get_instruction};
+use crate::opcode::{get_instruction, AddressingMode, Opcode};
 use bitfields::bitfield;
 use log::trace;
 
@@ -10,7 +10,7 @@ pub const RESET_VECTOR: u16 = 0xFFFC;
 pub const IRQ_VECTOR: u16 = 0xFFFE;
 
 #[bitfield(u8)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub struct Status {
     carry: bool,
     zero: bool,
@@ -18,7 +18,7 @@ pub struct Status {
     irqb_disable: bool,
     decimal_mode: bool,
     #[bits(default = true)]
-    brk_command: bool,
+    _brk_command: bool,
     #[bits(default = true)]
     _unused: bool,
     overflow: bool,
@@ -45,12 +45,6 @@ pub struct Cpu<M, I> {
     pub interrupt_provider: I,
     /// true if running
     run: bool,
-    /// software interrupt requested
-    brk: bool,
-    /// interrupt requested
-    irq: bool,
-    /// non-maskable interrupt requested
-    nmi: bool,
     /// waiting for interrupt
     wai: bool,
 }
@@ -67,9 +61,6 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
             memory,
             interrupt_provider,
             run: false,
-            brk: false,
-            irq: false,
-            nmi: false,
             wai: false,
         };
         cpu.reset();
@@ -84,9 +75,6 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
         self.s = INITIAL_STACK_POINTER;
         self.p = Status::default();
         self.pc = self.memory.read_u16(RESET_VECTOR);
-        self.brk = false;
-        self.irq = false;
-        self.nmi = false;
         self.wai = false;
     }
 
@@ -114,41 +102,22 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
             return;
         }
 
-        if self.interrupt_provider.consume_irq() {
-            self.irq = true;
-        }
-        if self.interrupt_provider.consume_nmi() {
-            self.nmi = true;
-        }
-
-        if self.brk {
-            self.brk = false;
-            assert!(!self.wai);
-            self.push_pc();
-            self.p.set_brk_command(true);
-            self.push_flags();
-            self.p.set_irqb_disable(true);
-            self.p.set_decimal_mode(false);
-            self.pc = self.memory.read_u16(IRQ_VECTOR);
-        }
-        if self.irq {
-            self.irq = false;
+        let irq = self.interrupt_provider.consume_irq();
+        let nmi = self.interrupt_provider.consume_nmi();
+        if irq {
             self.wai = false;
             if !self.p.irqb_disable() {
                 self.push_pc();
-                self.p.set_brk_command(false);
-                self.push_flags();
+                self.push_flags_no_brk();
                 self.p.set_irqb_disable(true);
                 self.p.set_decimal_mode(false);
                 self.pc = self.memory.read_u16(IRQ_VECTOR);
             }
         }
-        if self.nmi {
-            self.nmi = false;
+        if nmi {
             self.wai = false;
             self.push_pc();
-            self.p.set_brk_command(false);
-            self.push_flags();
+            self.push_flags_no_brk();
             self.p.set_irqb_disable(true);
             self.p.set_decimal_mode(false);
             self.pc = self.memory.read_u16(NMI_VECTOR);
@@ -161,7 +130,11 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
                 match opcode.opcode {
                     Opcode::ADC => {
                         let m = self.read_operand(opcode.parameter_1);
-                        self.do_addition(m);
+                        if self.p.decimal_mode() {
+                            self.do_addition_decimal(m);
+                        } else {
+                            self.do_addition(m);
+                        }
                     }
                     Opcode::AND => {
                         let m = self.read_operand(opcode.parameter_1);
@@ -186,16 +159,16 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
                     Opcode::BBR2 => self.bbr(2),
                     Opcode::BBR3 => self.bbr(3),
                     Opcode::BBR4 => self.bbr(4),
-                    Opcode::BBR6 => self.bbr(5),
-                    Opcode::BBR5 => self.bbr(6),
+                    Opcode::BBR5 => self.bbr(5),
+                    Opcode::BBR6 => self.bbr(6),
                     Opcode::BBR7 => self.bbr(7),
                     Opcode::BBS0 => self.bbs(0),
                     Opcode::BBS1 => self.bbs(1),
                     Opcode::BBS2 => self.bbs(2),
                     Opcode::BBS3 => self.bbs(3),
                     Opcode::BBS4 => self.bbs(4),
-                    Opcode::BBS6 => self.bbs(5),
-                    Opcode::BBS5 => self.bbs(6),
+                    Opcode::BBS5 => self.bbs(5),
+                    Opcode::BBS6 => self.bbs(6),
                     Opcode::BBS7 => self.bbs(7),
                     Opcode::BCC => self.branch(!self.p.carry()),
                     Opcode::BCS => self.branch(self.p.carry()),
@@ -215,7 +188,12 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
                     Opcode::BRA => self.branch(true),
                     Opcode::BRK => {
                         self.pc = self.pc.wrapping_add(1); // skip unused 2nd instruction byte
-                        self.brk = true;
+                        // BRK logic
+                        self.push_pc();
+                        self.push_flags();
+                        self.p.set_irqb_disable(true);
+                        self.p.set_decimal_mode(false);
+                        self.pc = self.memory.read_u16(IRQ_VECTOR);
                     }
                     Opcode::BVC => self.branch(!self.p.overflow()),
                     Opcode::BVS => self.branch(self.p.overflow()),
@@ -299,7 +277,6 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
                     }
                     Opcode::PHA => self.push(self.a),
                     Opcode::PHP => {
-                        self.p.set_brk_command(true);
                         self.push_flags();
                     }
                     Opcode::PHX => self.push(self.x),
@@ -363,7 +340,11 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
                     }
                     Opcode::SBC => {
                         let m = self.read_operand(opcode.parameter_1);
-                        self.do_addition(!m);
+                        if self.p.decimal_mode() {
+                            self.do_subtraction_decimal(m);
+                        } else {
+                            self.do_subtraction(m);
+                        }
                     }
                     Opcode::SEC => self.p.set_carry(true),
                     Opcode::SED => self.p.set_decimal_mode(true),
@@ -400,14 +381,14 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
                         let a = self.a;
                         let m = self.memory.read_u8(addr);
                         self.memory.write_u8(addr, m & !a);
-                        self.p.set_zero((m & a) != 0);
+                        self.p.set_zero((m & a) == 0);
                     }
                     Opcode::TSB => {
                         let addr = self.read_address(opcode.parameter_1);
                         let a = self.a;
                         let m = self.memory.read_u8(addr);
                         self.memory.write_u8(addr, m | a);
-                        self.p.set_zero((m & a) != 0);
+                        self.p.set_zero((m & a) == 0);
                     }
                     Opcode::TSX => self.set_x(self.s),
                     Opcode::TXA => self.set_a(self.x),
@@ -462,23 +443,19 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
                 self.pc.wrapping_add_signed(offset as i16)
             }
             AddressingMode::ZeroPage => self.read_u8_inc_pc() as u16,
-            AddressingMode::ZeroPageIndexedX => {
-                (self.read_u8_inc_pc() as u16).wrapping_add(self.x as u16)
-            }
-            AddressingMode::ZeroPageIndexedY => {
-                (self.read_u8_inc_pc() as u16).wrapping_add(self.y as u16)
-            }
+            AddressingMode::ZeroPageIndexedX => self.read_u8_inc_pc().wrapping_add(self.x) as u16,
+            AddressingMode::ZeroPageIndexedY => self.read_u8_inc_pc().wrapping_add(self.y) as u16,
             AddressingMode::ZeroPageIndirect => {
                 let address = self.read_u8_inc_pc() as u16;
-                self.memory.read_u16(address)
+                self.memory.read_u16_zp(address)
             }
             AddressingMode::ZeroPageIndexedIndirectX => {
-                let address = (self.read_u8_inc_pc() as u16).wrapping_add(self.x as u16);
-                self.memory.read_u16(address)
+                let address = self.read_u8_inc_pc().wrapping_add(self.x) as u16;
+                self.memory.read_u16_zp(address)
             }
             AddressingMode::ZeroPageIndirectIndexedY => {
                 let address = self.read_u8_inc_pc() as u16;
-                self.memory.read_u16(address).wrapping_add(self.y as u16)
+                self.memory.read_u16_zp(address).wrapping_add(self.y as u16)
             }
             _ => unimplemented!(),
         }
@@ -532,17 +509,81 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
     }
 
     fn push_flags(&mut self) {
+        // always set unused flag and brk flag
+        self.push(self.p.into_bits() | 0b0011_0000);
+    }
+
+    fn push_flags_no_brk(&mut self) {
         // always set unused flag
         self.push(self.p.into_bits() | 0b0010_0000);
     }
 
     fn do_addition(&mut self, m: u8) {
         let a = self.a;
-        let c = self.p.carry();
-        let r = a.wrapping_add(m).wrapping_add(c as u8);
+        let cf = self.p.carry();
+        let c = cf as u8;
+        let r = a.wrapping_add(m).wrapping_add(c);
         self.set_a(r);
-        self.p.set_carry(if c { r <= a } else { r < a });
+        self.p.set_carry(if cf { r <= a } else { r < a });
         self.p.set_overflow(((a ^ r) & (m ^ r) & 0x80) != 0);
+    }
+
+    fn do_addition_decimal(&mut self, m: u8) {
+        let a = self.a;
+        let cf = self.p.carry();
+
+        let mut c = cf as u8;
+        let mut lo = (a & 0xf).wrapping_add(m & 0xf).wrapping_add(c);
+        c = (lo > 9) as u8;
+        if c != 0 {
+            lo = (lo - 10) & 0xf;
+        }
+
+        let mut hi = (a >> 4).wrapping_add(m >> 4).wrapping_add(c);
+        let overflow_flag_pre = (hi & 0x8) << 4;
+        c = (hi > 9) as u8;
+        if c != 0 {
+            hi = (hi - 10) & 0xf;
+        }
+
+        let r = lo | (hi << 4);
+        self.set_a(r);
+        self.p.set_carry(c != 0);
+        self.p
+            .set_overflow(((a ^ overflow_flag_pre) & (m ^ overflow_flag_pre) & 0x80) != 0);
+    }
+
+    fn do_subtraction(&mut self, m: u8) {
+        self.do_addition(!m);
+    }
+
+    fn do_subtraction_decimal(&mut self, m: u8) {
+        let a = self.a;
+        let cf = self.p.carry();
+
+        let mut b = !cf as u8;
+        let mut lo = (a & 0xf).wrapping_sub(m & 0xf).wrapping_sub(b);
+        b = ((lo & 0x80) != 0) as u8;
+        if b != 0 {
+            lo = lo.wrapping_add(10);
+        }
+        let negative_lo = (lo & 0x80) != 0;
+        lo &= 0xf;
+
+        let mut hi = (a >> 4).wrapping_sub(m >> 4).wrapping_sub(b);
+        let overflow_flag_pre = (hi & 0x8) << 4;
+        b = ((hi & 0x80) != 0) as u8;
+        if b != 0 {
+            hi = hi.wrapping_add(10);
+        }
+        hi = hi.wrapping_sub(negative_lo as u8);
+        hi &= 0xf;
+
+        let r = lo | (hi << 4);
+        self.set_a(r);
+        self.p.set_carry(b == 0);
+        self.p
+            .set_overflow(((a ^ overflow_flag_pre) & (!m ^ overflow_flag_pre) & 0x80) != 0);
     }
 
     fn bbr(&mut self, bit: u8) {

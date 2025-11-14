@@ -20,7 +20,6 @@ fn cmp_check_immediates(a: u8, b: u8) {
 
     // keep other flags
     assert_eq!(prev_p.overflow(), cpu.p.overflow());
-    assert_eq!(prev_p.brk_command(), cpu.p.brk_command());
     assert_eq!(prev_p.decimal_mode(), cpu.p.decimal_mode());
     assert_eq!(prev_p.irqb_disable(), cpu.p.irqb_disable());
 
