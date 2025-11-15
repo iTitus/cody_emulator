@@ -3,7 +3,7 @@ name = "cody_emulator"
 version = "0.1.0"
 authors = ["iTitus"]
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.88" # let chains
 repository = "https://github.com/iTitus/cody_emulator"
 license = "MIT"
 
@@ -23,7 +23,7 @@ strum = { version = "0.27", features = ["derive"] }
 thiserror = "2"
 
 # graphics
-bytemuck = { version = "1.23", features = ["latest_stable_rust"] }
+bytemuck = { version = "1.24", features = ["derive"] }
 glam = { version = "0.30", features = ["bytemuck"] }
 pollster = "0.4"
 wgpu = "27.0"
