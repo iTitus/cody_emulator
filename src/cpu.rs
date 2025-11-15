@@ -1,6 +1,6 @@
 use crate::interrupt::InterruptProvider;
 use crate::memory::Memory;
-use crate::opcode::{get_instruction, AddressingMode, Opcode};
+use crate::opcode::{AddressingMode, Opcode, get_instruction};
 use bitfields::bitfield;
 use log::trace;
 

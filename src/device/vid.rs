@@ -573,6 +573,19 @@ impl State {
     }
 
     fn render(&mut self, memory: &Arc<Mutex<impl Memory>>) {
+        // Create texture view
+        let Ok(surface_texture) = self.surface.get_current_texture() else {
+            return; // next texture is not available, just skip presenting the current frame
+        };
+        let texture_view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor {
+                // Without add_srgb_suffix() the image we will be working with
+                // might not be "gamma correct".
+                format: Some(self.surface_format.add_srgb_suffix()),
+                ..Default::default()
+            });
+
         // update uniform
         {
             const TARGET_WIDTH: u32 = 640;
@@ -614,20 +627,6 @@ impl State {
         }
 
         self.render_pixels(memory);
-
-        // Create texture view
-        let surface_texture = self
-            .surface
-            .get_current_texture()
-            .expect("failed to acquire next swapchain texture");
-        let texture_view = surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor {
-                // Without add_srgb_suffix() the image we will be working with
-                // might not be "gamma correct".
-                format: Some(self.surface_format.add_srgb_suffix()),
-                ..Default::default()
-            });
 
         // upload raw pixel data
         self.queue.write_texture(
