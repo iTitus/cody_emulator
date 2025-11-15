@@ -5,7 +5,7 @@ use crate::device::via::Via;
 use crate::interrupt::{InterruptTrigger, SimpleInterruptProvider};
 use crate::memory::{Contiguous, MappedMemory, Memory};
 use glam::{Mat4, Quat, Vec2, Vec3};
-use log::{info, trace};
+use log::{debug, info};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
@@ -964,16 +964,15 @@ pub fn start(
                     // transmit
                     while let Some(c) = uart1.transmit_buffer.pop() {
                         // discard
-                        let c = c as char;
-                        print!("{c}");
+                        debug!("UART1 tx: {:?} ({c})", c as char);
                     }
 
                     // receive
                     while !uart1.receive_buffer.is_full() {
                         if let Some(value) = uart1_source.pop_front() {
                             uart1.receive_buffer.push(value);
-                            trace!(
-                                "push byte {:?} ({value}), remaining {}/{source_size}",
+                            debug!(
+                                "UART1 rx: push byte {:?} ({value}), remaining {}/{source_size}",
                                 value as char,
                                 uart1_source.len()
                             )
