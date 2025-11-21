@@ -28,3 +28,7 @@ glam = { version = "0.30", features = ["bytemuck"] }
 pollster = "0.4"
 wgpu = "27.0"
 winit = "0.30"
+
+[profile.release]
+lto = true
+codegen-units = 1
