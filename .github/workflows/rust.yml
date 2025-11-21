@@ -10,13 +10,42 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  lint:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v6
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - uses: actions/checkout@v6
+      - run: rustup toolchain install stable --profile minimal --no-self-update
+      - run: rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Lint with clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Check code formatting with rustfmt
+        run: cargo fmt -- --check
+
+  build:
+    needs: [ lint ]
+    strategy:
+      matrix:
+        BUILD_TARGET: [ release ]
+        OS: [ ubuntu-latest, macos-latest, windows-latest ]
+    runs-on: ${{ matrix.OS }}
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup toolchain install stable --profile minimal --no-self-update
+      - run: rustup --version
+      - uses: Swatinem/rust-cache@v2
+      - name: Check code in "${{ matrix.BUILD_TARGET }}" mode
+        run: cargo check --verbose --all-targets --all-features --profile ${{ matrix.BUILD_TARGET }}
+      - name: Run tests in "${{ matrix.BUILD_TARGET }}" mode
+        run: cargo test --verbose --profile ${{ matrix.BUILD_TARGET }}
+      - name: Build binaries in "${{ matrix.BUILD_TARGET }}" mode
+        run: cargo build --verbose --profile ${{ matrix.BUILD_TARGET }}
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v5
+        if: ${{ matrix.BUILD_TARGET == 'release'}}
+        with:
+          name: cody_emulator_${{ matrix.OS }}_${{ matrix.BUILD_TARGET }}
+          path: |
+            target/${{ matrix.BUILD_TARGET }}/cody_emulator*
+            !**/*.d
+            !**/*.*lib
