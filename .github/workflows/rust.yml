@@ -48,4 +48,5 @@ jobs:
           path: |
             target/${{ matrix.BUILD_TARGET }}/cody_emulator*
             !**/*.d
+            !**/*.pdb
             !**/*.*lib
