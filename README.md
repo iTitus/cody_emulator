@@ -37,6 +37,9 @@ Options:
           
           Use this when your input text file might have CRLF-style line endings.
 
+      --physical-keyboard
+          Emulate the keyboard by physically mapping the cody keyboard, without respecting the host's layout
+
   -v, --verbose...
           Each time this option is added increases the default logging level
 

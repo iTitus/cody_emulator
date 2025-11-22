@@ -1,5 +1,6 @@
 use crate::cpu;
 use crate::cpu::Cpu;
+use crate::device::keyboard::{Keyboard, KeyboardEmulation};
 use crate::device::uart::{UART1_BASE, Uart};
 use crate::device::via::Via;
 use crate::interrupt::{InterruptTrigger, SimpleInterruptProvider};
@@ -17,7 +18,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 use wgpu;
 use wgpu::util::DeviceExt;
-use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -687,58 +687,12 @@ impl State {
         self.window.pre_present_notify();
         surface_texture.present();
     }
-
-    fn on_keyboard_input(&self, via_device: &Arc<Mutex<Via>>, code: KeyCode, pressed: bool) {
-        let mut via_device = via_device.lock().unwrap();
-        let cody_code = match code {
-            KeyCode::KeyQ => 1,
-            KeyCode::KeyE => 2,
-            KeyCode::KeyT => 3,
-            KeyCode::KeyU => 4,
-            KeyCode::KeyO => 5,
-            KeyCode::KeyA => 6,
-            KeyCode::KeyD => 7,
-            KeyCode::KeyG => 8,
-            KeyCode::KeyJ => 9,
-            KeyCode::KeyL => 10,
-            KeyCode::ShiftLeft | KeyCode::ShiftRight => 11, // cody modifier (makes numbers)
-            KeyCode::KeyX => 12,
-            KeyCode::KeyV => 13,
-            KeyCode::KeyN => 14,
-            KeyCode::ControlLeft | KeyCode::ControlRight => 15, // meta modifier (makes punctuation)
-            KeyCode::KeyZ => 16,
-            KeyCode::KeyC => 17,
-            KeyCode::KeyB => 18,
-            KeyCode::KeyM => 19,
-            KeyCode::Enter => 20, // arrow key
-            KeyCode::KeyS => 21,
-            KeyCode::KeyF => 22,
-            KeyCode::KeyH => 23,
-            KeyCode::KeyK => 24,
-            KeyCode::Space => 25,
-            KeyCode::KeyW => 26,
-            KeyCode::KeyR => 27,
-            KeyCode::KeyY => 28,
-            KeyCode::KeyI => 29,
-            KeyCode::KeyP => 30,
-            // gamepad emulation
-            KeyCode::ArrowUp => 31,                     // up
-            KeyCode::ArrowDown => 32,                   // down
-            KeyCode::ArrowLeft => 33,                   // left
-            KeyCode::ArrowRight => 34,                  // right
-            KeyCode::AltLeft | KeyCode::AltRight => 35, // fire button
-            _ => 0,
-        };
-        if cody_code > 0 {
-            via_device.set_pressed(cody_code - 1, pressed);
-        }
-    }
 }
 
 struct App<M> {
     state: Option<State>,
     memory: Arc<Mutex<M>>,
-    via_device: Arc<Mutex<Via>>,
+    keyboard_device: Arc<Mutex<Keyboard>>,
     last_frame: Option<Instant>,
 }
 
@@ -799,9 +753,10 @@ impl<M: Memory> ApplicationHandler for App<M> {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if let PhysicalKey::Code(code) = event.physical_key {
-                    state.on_keyboard_input(&self.via_device, code, event.state.is_pressed());
-                }
+                self.keyboard_device
+                    .lock()
+                    .unwrap()
+                    .on_keyboard_event(event);
             }
             _ => {}
         }
@@ -818,6 +773,7 @@ pub fn start(
     nmi_vector: Option<u16>,
     uart1_source: Option<impl AsRef<Path>>,
     fix_newlines: bool,
+    physical_keyboard: bool,
 ) {
     info!(
         "Loading binary {}{}",
@@ -1004,7 +960,14 @@ pub fn start(
     let mut app = App {
         state: None,
         memory,
-        via_device,
+        keyboard_device: Arc::new(Mutex::new(Keyboard::new(
+            if physical_keyboard {
+                KeyboardEmulation::Physical
+            } else {
+                KeyboardEmulation::Logical
+            },
+            via_device,
+        ))),
         last_frame: None,
     };
     event_loop.run_app(&mut app).unwrap();

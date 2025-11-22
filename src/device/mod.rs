@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+pub mod keyboard;
 pub mod uart;
 pub mod via;
 pub mod vid;

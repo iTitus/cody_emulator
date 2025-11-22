@@ -41,6 +41,10 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     fix_newlines: bool,
 
+    /// Emulate the keyboard by physically mapping the cody keyboard, without respecting the host's layout.
+    #[arg(long, default_value_t = false)]
+    physical_keyboard: bool,
+
     /// Each time this option is added increases the default logging level
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -72,6 +76,7 @@ pub fn main() {
         cli.nmi_vector,
         cli.uart1_source.as_deref(),
         cli.fix_newlines,
+        cli.physical_keyboard,
     );
 }
 
