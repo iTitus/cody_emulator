@@ -896,10 +896,12 @@ pub fn start(
             let mut r = BufReader::new(f);
             if fix_newlines {
                 let mut data = VecDeque::new();
-                for l in r.lines().map_while(Result::ok) {
+                for l in r.lines().map_while(Result::ok).filter(|l| !l.is_empty()) {
                     data.extend(l.bytes());
                     data.push_back(b'\n');
                 }
+                // CodyBASIC requires an empty line to terminate the LOAD command
+                data.push_back(b'\n');
                 data
             } else {
                 let mut buf = vec![];

@@ -35,9 +35,9 @@ struct Cli {
     #[arg(long)]
     uart1_source: Option<PathBuf>,
 
-    /// This option will normalize newlines when reading data for the UART.
+    /// This option will normalize newlines when reading text data for the UART.
     ///
-    /// Use this when your input text file might have CRLF-style line endings.
+    /// Use this when your input text file might have CRLF-style line endings or to make sure it works for the CodyBASIC's LOAD 1,0 command.
     #[arg(long, default_value_t = false)]
     fix_newlines: bool,
 

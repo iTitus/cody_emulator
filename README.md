@@ -35,7 +35,7 @@ Options:
       --fix-newlines
           This option will normalize newlines when reading data for the UART.
           
-          Use this when your input text file might have CRLF-style line endings.
+          Use this when your input text file might have CRLF-style line endings or to make sure it works for the CodyBASIC's LOAD 1,0 command.
 
       --physical-keyboard
           Emulate the keyboard by physically mapping the cody keyboard, without respecting the host's layout
