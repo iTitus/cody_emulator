@@ -1,34 +1,22 @@
 {
   inputs = {
-    naersk.url = "github:nix-community/naersk/master";
+    flake-compat = {
+      url = github:edolstra/flake-compat;
+      flake = false;
+    };
+    flake-utils.url = "github:numtide/flake-utils";
+    naersk.url = "github:nix-community/naersk";
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    utils.url = "github:numtide/flake-utils";
   };
 
-  outputs =
-    {
-      self,
-      nixpkgs,
-      utils,
-      naersk,
-    }:
-    utils.lib.eachDefaultSystem (
-      system:
+  outputs = { self, flake-utils, naersk, nixpkgs, ... }:
+    flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; };
-        lib = pkgs.lib;
-        naersk-lib = pkgs.callPackage naersk { };
-      in
-      {
-        defaultPackage = naersk-lib.buildPackage {
-          src = lib.cleanSource (
-            lib.sourceFilesBySuffices ./. [
-              ".rs"
-              ".wgsl"
-              ".toml"
-              ".lock"
-            ]
-          );
+        pkgs = (import nixpkgs) { inherit system; };
+        naersk' = pkgs.callPackage naersk { };
+      in {
+        defaultPackage = naersk'.buildPackage {
+          src = ./.;
 
           nativeBuildInputs = with pkgs; [
             autoPatchelfHook 
