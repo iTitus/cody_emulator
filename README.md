@@ -33,9 +33,9 @@ Options:
           Path of file used to fill the UART1 receive buffer with bytes
 
       --fix-newlines
-          This option will normalize newlines when reading data for the UART.
+          This option will normalize newlines when reading text data for the UART.
           
-          Use this when your input text file might have CRLF-style line endings or to make sure it works for the CodyBASIC's LOAD 1,0 command.
+          Use this when your input text file might have CRLF-style line endings or to make sure it works for CodyBASIC's LOAD 1,0 command.
 
       --physical-keyboard
           Emulate the keyboard by physically mapping the cody keyboard, without respecting the host's layout
