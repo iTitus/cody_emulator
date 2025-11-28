@@ -50,21 +50,21 @@ impl Default for Color {
 
 impl Color {
     const BLACK: Color = Color::rgb(0x000000);
-    const WHITE: Color = Color::rgb(0xFFFFFF);
-    const RED: Color = Color::rgb(0x880000);
-    const GREEN: Color = Color::rgb(0x00CC55);
-    const BLUE: Color = Color::rgb(0x0000AA);
-    const YELLOW: Color = Color::rgb(0xEEEE77);
-    const PURPLE: Color = Color::rgb(0xCC44CC);
-    const CYAN: Color = Color::rgb(0xAAFFEE);
-    const ORANGE: Color = Color::rgb(0xDD8855);
-    const BROWN: Color = Color::rgb(0x664400);
-    const GRAY: Color = Color::rgb(0x777777);
-    const LIGHT_GRAY: Color = Color::rgb(0xBBBBBB);
-    const DARK_GRAY: Color = Color::rgb(0x333333);
-    const LIGHT_RED: Color = Color::rgb(0xFF7777);
-    const LIGHT_GREEN: Color = Color::rgb(0xAAFF66);
-    const LIGHT_BLUE: Color = Color::rgb(0x0088FF);
+    const WHITE: Color = Color::rgb(0xffffff);
+    const RED: Color = Color::rgb(0xcc0000);
+    const GREEN: Color = Color::rgb(0x33ff66);
+    const BLUE: Color = Color::rgb(0x0d0066);
+    const YELLOW: Color = Color::rgb(0xffe699);
+    const PURPLE: Color = Color::rgb(0xcc0099);
+    const CYAN: Color = Color::rgb(0x99ffd9);
+    const ORANGE: Color = Color::rgb(0xffbf99);
+    const BROWN: Color = Color::rgb(0xcc4d0);
+    const GRAY: Color = Color::rgb(0x999999);
+    const LIGHT_GRAY: Color = Color::rgb(0xcccccc);
+    const DARK_GRAY: Color = Color::rgb(0x666666);
+    const LIGHT_RED: Color = Color::rgb(0xff9999);
+    const LIGHT_GREEN: Color = Color::rgb(0x99ffb3);
+    const LIGHT_BLUE: Color = Color::rgb(0xa699ff);
 
     const PALETTE: [Self; 16] = [
         Self::BLACK,
