@@ -58,7 +58,7 @@ impl Color {
     const PURPLE: Color = Color::rgb(0xcc0099);
     const CYAN: Color = Color::rgb(0x99ffd9);
     const ORANGE: Color = Color::rgb(0xffbf99);
-    const BROWN: Color = Color::rgb(0xcc4d0);
+    const BROWN: Color = Color::rgb(0xcc4d00);
     const GRAY: Color = Color::rgb(0x999999);
     const LIGHT_GRAY: Color = Color::rgb(0xcccccc);
     const DARK_GRAY: Color = Color::rgb(0x666666);
