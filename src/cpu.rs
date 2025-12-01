@@ -1,4 +1,3 @@
-use crate::interrupt::InterruptProvider;
 use crate::memory::Memory;
 use crate::opcode::{AddressingMode, Opcode, get_instruction};
 use bitfields::bitfield;
@@ -26,7 +25,7 @@ pub struct Status {
 }
 
 #[derive(Debug, Default)]
-pub struct Cpu<M, I> {
+pub struct Cpu<M> {
     /// A register
     pub a: u8,
     /// X register
@@ -41,16 +40,18 @@ pub struct Cpu<M, I> {
     pub pc: u16,
     /// memory
     pub memory: M,
-    /// interrupt provider
-    pub interrupt_provider: I,
     /// true if running
     run: bool,
     /// waiting for interrupt
     wai: bool,
+    /// pending IRQ
+    pending_irq: bool,
+    /// pending NMI
+    pending_nmi: bool,
 }
 
-impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
-    pub fn new(memory: M, interrupt_provider: I) -> Self {
+impl<M: Memory> Cpu<M> {
+    pub fn new(memory: M) -> Self {
         let mut cpu = Self {
             a: 0,
             x: 0,
@@ -59,9 +60,10 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
             p: Status::default(),
             pc: 0,
             memory,
-            interrupt_provider,
             run: false,
             wai: false,
+            pending_irq: false,
+            pending_nmi: false,
         };
         cpu.reset();
         cpu
@@ -76,19 +78,8 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
         self.p = Status::default();
         self.pc = self.memory.read_u16(RESET_VECTOR);
         self.wai = false;
-    }
-
-    pub fn instruction_finished(&self) -> bool {
-        true
-    }
-
-    pub fn step_instruction(&mut self) {
-        loop {
-            self.step_cycle();
-            if !self.run || self.instruction_finished() {
-                break;
-            }
-        }
+        self.pending_irq = false;
+        self.pending_nmi = false;
     }
 
     pub fn run(&mut self) {
@@ -97,31 +88,28 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
         }
     }
 
-    pub fn step_cycle(&mut self) {
+    pub fn step_instruction(&mut self) {
         if !self.run {
             return;
         }
 
-        let irq = self.interrupt_provider.consume_irq();
-        let nmi = self.interrupt_provider.consume_nmi();
-        if irq {
+        let nmi = self.pending_nmi;
+        let irq = self.pending_irq;
+        if nmi || irq {
+            self.pending_nmi = false;
+            self.pending_irq = false;
             self.wai = false;
-            if !self.p.irqb_disable() {
+            if nmi || (irq && !self.p.irqb_disable()) {
                 self.push_pc();
                 self.push_flags_no_brk();
                 self.p.set_irqb_disable(true);
                 self.p.set_decimal_mode(false);
-                self.pc = self.memory.read_u16(IRQ_VECTOR);
+                self.pc = self
+                    .memory
+                    .read_u16(if nmi { NMI_VECTOR } else { IRQ_VECTOR });
             }
         }
-        if nmi {
-            self.wai = false;
-            self.push_pc();
-            self.push_flags_no_brk();
-            self.p.set_irqb_disable(true);
-            self.p.set_decimal_mode(false);
-            self.pc = self.memory.read_u16(NMI_VECTOR);
-        }
+
         if !self.wai {
             let pc = self.pc;
             let opcode = get_instruction(self.read_u8_inc_pc());
@@ -446,15 +434,15 @@ impl<M: Memory, I: InterruptProvider> Cpu<M, I> {
             AddressingMode::ZeroPageIndexedX => self.read_u8_inc_pc().wrapping_add(self.x) as u16,
             AddressingMode::ZeroPageIndexedY => self.read_u8_inc_pc().wrapping_add(self.y) as u16,
             AddressingMode::ZeroPageIndirect => {
-                let address = self.read_u8_inc_pc() as u16;
+                let address = self.read_u8_inc_pc();
                 self.memory.read_u16_zp(address)
             }
             AddressingMode::ZeroPageIndexedIndirectX => {
-                let address = self.read_u8_inc_pc().wrapping_add(self.x) as u16;
+                let address = self.read_u8_inc_pc().wrapping_add(self.x);
                 self.memory.read_u16_zp(address)
             }
             AddressingMode::ZeroPageIndirectIndexedY => {
-                let address = self.read_u8_inc_pc() as u16;
+                let address = self.read_u8_inc_pc();
                 self.memory.read_u16_zp(address).wrapping_add(self.y as u16)
             }
             _ => unimplemented!(),

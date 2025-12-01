@@ -1,8 +1,7 @@
 use crate::device::via::Via;
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-use winit::event::KeyEvent;
-use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
+use winit::keyboard::{Key, KeyCode, NamedKey};
+use winit_input_helper::WinitInputHelper;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum KeyboardEmulation {
@@ -14,8 +13,6 @@ pub enum KeyboardEmulation {
 pub struct Keyboard {
     pub keyboard_emulation: KeyboardEmulation,
     pub via_device: Arc<Mutex<Via>>,
-    cody_mod_keys: HashSet<u8>,
-    meta_mod_keys: HashSet<u8>,
 }
 
 impl Keyboard {
@@ -23,306 +20,212 @@ impl Keyboard {
         Self {
             keyboard_emulation,
             via_device,
-            cody_mod_keys: Default::default(),
-            meta_mod_keys: Default::default(),
         }
     }
 
-    pub fn on_keyboard_event(&mut self, event: KeyEvent) {
+    pub fn update(&mut self, input: &WinitInputHelper) {
         match self.keyboard_emulation {
-            KeyboardEmulation::Physical => self.on_keyboard_input_physical(event),
-            KeyboardEmulation::Logical => self.on_keyboard_input_logical(event),
+            KeyboardEmulation::Physical => self.update_physical(input),
+            KeyboardEmulation::Logical => self.update_logical(input),
         }
     }
 
-    fn on_keyboard_input_physical(&self, event: KeyEvent) {
-        let PhysicalKey::Code(code) = event.physical_key else {
-            return;
-        };
-        let pressed = event.state.is_pressed();
-        let cody_code = match code {
-            KeyCode::KeyQ => 1,
-            KeyCode::KeyE => 2,
-            KeyCode::KeyT => 3,
-            KeyCode::KeyU => 4,
-            KeyCode::KeyO => 5,
-            KeyCode::KeyA => 6,
-            KeyCode::KeyD => 7,
-            KeyCode::KeyG => 8,
-            KeyCode::KeyJ => 9,
-            KeyCode::KeyL => 10,
-            KeyCode::ControlLeft | KeyCode::ControlRight => 11, // cody modifier (makes numbers)
-            KeyCode::KeyX => 12,
-            KeyCode::KeyV => 13,
-            KeyCode::KeyN => 14,
-            KeyCode::AltLeft | KeyCode::AltRight => 15, // meta modifier (makes punctuation)
-            KeyCode::KeyZ => 16,
-            KeyCode::KeyC => 17,
-            KeyCode::KeyB => 18,
-            KeyCode::KeyM => 19,
-            KeyCode::Enter => 20, // arrow key
-            KeyCode::KeyS => 21,
-            KeyCode::KeyF => 22,
-            KeyCode::KeyH => 23,
-            KeyCode::KeyK => 24,
-            KeyCode::Space => 25,
-            KeyCode::KeyW => 26,
-            KeyCode::KeyR => 27,
-            KeyCode::KeyY => 28,
-            KeyCode::KeyI => 29,
-            KeyCode::KeyP => 30,
+    fn update_physical(&self, input: &WinitInputHelper) {
+        const MAPPING: [(KeyCode, u8); 38] = [
+            (KeyCode::KeyQ, 0),
+            (KeyCode::KeyE, 1),
+            (KeyCode::KeyT, 2),
+            (KeyCode::KeyU, 3),
+            (KeyCode::KeyO, 4),
+            (KeyCode::KeyA, 5),
+            (KeyCode::KeyD, 6),
+            (KeyCode::KeyG, 7),
+            (KeyCode::KeyJ, 8),
+            (KeyCode::KeyL, 9),
+            (KeyCode::ControlLeft, 10),  // cody modifier (makes numbers)
+            (KeyCode::ControlRight, 10), // cody modifier (makes numbers)
+            (KeyCode::KeyX, 11),
+            (KeyCode::KeyV, 12),
+            (KeyCode::KeyN, 13),
+            (KeyCode::AltLeft, 14),  // meta modifier (makes punctuation)
+            (KeyCode::AltRight, 14), // meta modifier (makes punctuation)
+            (KeyCode::KeyZ, 15),
+            (KeyCode::KeyC, 16),
+            (KeyCode::KeyB, 17),
+            (KeyCode::KeyM, 18),
+            (KeyCode::Enter, 19), // arrow key
+            (KeyCode::KeyS, 20),
+            (KeyCode::KeyF, 21),
+            (KeyCode::KeyH, 22),
+            (KeyCode::KeyK, 23),
+            (KeyCode::Space, 24),
+            (KeyCode::KeyW, 25),
+            (KeyCode::KeyR, 26),
+            (KeyCode::KeyY, 27),
+            (KeyCode::KeyI, 28),
+            (KeyCode::KeyP, 39),
             // gamepad emulation
-            KeyCode::ArrowUp => 31,                         // up
-            KeyCode::ArrowDown => 32,                       // down
-            KeyCode::ArrowLeft => 33,                       // left
-            KeyCode::ArrowRight => 34,                      // right
-            KeyCode::ShiftLeft | KeyCode::ShiftRight => 35, // fire button
-            _ => 0,
-        };
-        if cody_code > 0 {
-            let mut via_device = self.via_device.lock().unwrap();
-            via_device.set_pressed(cody_code - 1, pressed);
+            (KeyCode::ArrowUp, 30),    // up
+            (KeyCode::ArrowDown, 31),  // down
+            (KeyCode::ArrowLeft, 32),  // left
+            (KeyCode::ArrowRight, 33), // right
+            (KeyCode::ShiftLeft, 34),  // fire button
+            (KeyCode::ShiftRight, 34), // fire button
+        ];
+
+        let mut state = [false; 40];
+        for (keycode, code) in MAPPING {
+            state[code as usize] |= input.key_held(keycode);
+        }
+
+        let mut via_device = self.via_device.lock().unwrap();
+        for (code, pressed) in state.into_iter().enumerate() {
+            via_device.set_pressed(code as u8, pressed);
         }
     }
 
-    fn on_keyboard_input_logical(&mut self, event: KeyEvent) {
-        let key = event.logical_key;
-        let pressed = event.state.is_pressed();
-        let mut cody_mod = false;
-        let mut meta_mod = false;
-        let cody_code = match key {
-            Key::Named(key) => match key {
-                NamedKey::Control => {
-                    cody_mod = true;
-                    11 // cody modifier (makes numbers)
-                }
-                NamedKey::Alt => {
-                    meta_mod = true;
-                    15 // meta modifier (makes punctuation)
-                }
-                NamedKey::Enter => 20, // arrow key
-                NamedKey::Backspace => {
-                    meta_mod = true;
-                    20 // with arrow key
-                }
-                NamedKey::Space => 25,
-                // gamepad emulation
-                NamedKey::ArrowUp => 31,    // up
-                NamedKey::ArrowDown => 32,  // down
-                NamedKey::ArrowLeft => 33,  // left
-                NamedKey::ArrowRight => 34, // right
-                NamedKey::Shift => 35,      // fire button
-                _ => 0,
-            },
-            Key::Character(c) => {
-                if !c.is_ascii() || c.len() != 1 {
-                    0
-                } else {
-                    let mut c = c.chars().next().unwrap().to_ascii_lowercase();
-                    match c {
-                        '1' => {
-                            cody_mod = true;
-                            c = 'q';
-                        }
-                        '2' => {
-                            cody_mod = true;
-                            c = 'w';
-                        }
-                        '3' => {
-                            cody_mod = true;
-                            c = 'e';
-                        }
-                        '4' => {
-                            cody_mod = true;
-                            c = 'r';
-                        }
-                        '5' => {
-                            cody_mod = true;
-                            c = 't';
-                        }
-                        '6' => {
-                            cody_mod = true;
-                            c = 'y';
-                        }
-                        '7' => {
-                            cody_mod = true;
-                            c = 'u';
-                        }
-                        '8' => {
-                            cody_mod = true;
-                            c = 'i';
-                        }
-                        '9' => {
-                            cody_mod = true;
-                            c = 'o';
-                        }
-                        '0' => {
-                            cody_mod = true;
-                            c = 'p';
-                        }
-                        '!' => {
-                            meta_mod = true;
-                            c = 'q';
-                        }
-                        '"' => {
-                            meta_mod = true;
-                            c = 'w';
-                        }
-                        '#' => {
-                            meta_mod = true;
-                            c = 'e';
-                        }
-                        '$' => {
-                            meta_mod = true;
-                            c = 'r';
-                        }
-                        '%' => {
-                            meta_mod = true;
-                            c = 't';
-                        }
-                        '^' => {
-                            meta_mod = true;
-                            c = 'y';
-                        }
-                        '&' => {
-                            meta_mod = true;
-                            c = 'u';
-                        }
-                        '*' => {
-                            meta_mod = true;
-                            c = 'i';
-                        }
-                        '(' => {
-                            meta_mod = true;
-                            c = 'o';
-                        }
-                        ')' => {
-                            meta_mod = true;
-                            c = 'p';
-                        }
-                        '@' => {
-                            meta_mod = true;
-                            c = 'a';
-                        }
-                        '=' => {
-                            meta_mod = true;
-                            c = 's';
-                        }
-                        '-' => {
-                            meta_mod = true;
-                            c = 's';
-                        }
-                        '+' => {
-                            meta_mod = true;
-                            c = 'f';
-                        }
-                        ':' => {
-                            meta_mod = true;
-                            c = 'g';
-                        }
-                        ';' => {
-                            meta_mod = true;
-                            c = 'h';
-                        }
-                        '\'' => {
-                            meta_mod = true;
-                            c = 'j';
-                        }
-                        '[' => {
-                            meta_mod = true;
-                            c = 'k';
-                        }
-                        ']' => {
-                            meta_mod = true;
-                            c = 'l';
-                        }
-                        '\\' => {
-                            meta_mod = true;
-                            c = 'z';
-                        }
-                        '<' => {
-                            meta_mod = true;
-                            c = 'x';
-                        }
-                        '>' => {
-                            meta_mod = true;
-                            c = 'c';
-                        }
-                        ',' => {
-                            meta_mod = true;
-                            c = 'v';
-                        }
-                        '.' => {
-                            meta_mod = true;
-                            c = 'b';
-                        }
-                        '?' => {
-                            meta_mod = true;
-                            c = 'n';
-                        }
-                        '/' => {
-                            meta_mod = true;
-                            c = 'm';
-                        }
-                        _ => {}
+    fn update_logical(&mut self, input: &WinitInputHelper) {
+        fn requires_cody_key(key: &Key<&str>) -> Option<Key<&'static str>> {
+            match key {
+                Key::Character(key) => {
+                    if key.len() != 1 || !key.is_ascii() {
+                        return None;
                     }
-
-                    match c {
-                        'q' => 1,
-                        'e' => 2,
-                        't' => 3,
-                        'u' => 4,
-                        'o' => 5,
-                        'a' => 6,
-                        'd' => 7,
-                        'g' => 8,
-                        'j' => 9,
-                        'l' => 10,
-                        'x' => 12,
-                        'v' => 13,
-                        'n' => 14,
-                        'z' => 16,
-                        'c' => 17,
-                        'b' => 18,
-                        'm' => 19,
-                        '\n' | '\r' => 20,
-                        's' => 21,
-                        'f' => 22,
-                        'h' => 23,
-                        'k' => 24,
-                        ' ' => 25,
-                        'w' => 26,
-                        'r' => 27,
-                        'y' => 28,
-                        'i' => 29,
-                        'p' => 30,
-                        _ => 0,
+                    match key.chars().next().unwrap().to_ascii_lowercase() {
+                        '1' => Some(Key::Character("q")),
+                        '2' => Some(Key::Character("w")),
+                        '3' => Some(Key::Character("e")),
+                        '4' => Some(Key::Character("r")),
+                        '5' => Some(Key::Character("t")),
+                        '6' => Some(Key::Character("y")),
+                        '7' => Some(Key::Character("u")),
+                        '8' => Some(Key::Character("i")),
+                        '9' => Some(Key::Character("o")),
+                        '0' => Some(Key::Character("p")),
+                        _ => None,
                     }
                 }
+                _ => None,
             }
-            _ => 0,
-        };
-        if cody_code > 0 {
-            let cody_code = cody_code - 1;
-            if cody_mod {
-                if pressed {
-                    self.cody_mod_keys.insert(cody_code);
-                } else {
-                    self.cody_mod_keys.remove(&cody_code);
+        }
+
+        fn requires_meta_key(key: &Key<&str>) -> Option<Key<&'static str>> {
+            match key {
+                Key::Named(NamedKey::Backspace) => Some(Key::Named(NamedKey::Enter)),
+                Key::Character(key) => {
+                    if key.len() != 1 || !key.is_ascii() {
+                        return None;
+                    }
+                    match key.chars().next().unwrap().to_ascii_lowercase() {
+                        '!' => Some(Key::Character("q")),
+                        '"' => Some(Key::Character("w")),
+                        '#' => Some(Key::Character("e")),
+                        '$' => Some(Key::Character("r")),
+                        '%' => Some(Key::Character("t")),
+                        '^' => Some(Key::Character("y")),
+                        '&' => Some(Key::Character("u")),
+                        '*' => Some(Key::Character("i")),
+                        '(' => Some(Key::Character("o")),
+                        ')' => Some(Key::Character("p")),
+                        '@' => Some(Key::Character("a")),
+                        '=' => Some(Key::Character("s")),
+                        '-' => Some(Key::Character("d")),
+                        '+' => Some(Key::Character("f")),
+                        ':' => Some(Key::Character("g")),
+                        ';' => Some(Key::Character("h")),
+                        '\'' => Some(Key::Character("j")),
+                        '[' => Some(Key::Character("k")),
+                        ']' => Some(Key::Character("l")),
+                        '\\' => Some(Key::Character("z")),
+                        '<' => Some(Key::Character("x")),
+                        '>' => Some(Key::Character("c")),
+                        ',' => Some(Key::Character("v")),
+                        '.' => Some(Key::Character("b")),
+                        '?' => Some(Key::Character("n")),
+                        '/' => Some(Key::Character("m")),
+                        _ => None,
+                    }
                 }
+                _ => None,
             }
-            if meta_mod {
-                if pressed {
-                    self.meta_mod_keys.insert(cody_code);
-                } else {
-                    self.meta_mod_keys.remove(&cody_code);
+        }
+
+        fn cody_code(key: &Key<&str>) -> Option<u8> {
+            match key {
+                Key::Named(key) => match key {
+                    NamedKey::Control => Some(11), // cody modifier (makes numbers)
+                    NamedKey::Alt => Some(14),     // meta modifier (makes punctuation)
+                    NamedKey::Enter => Some(19),   // arrow key
+                    NamedKey::Space => Some(24),
+                    // gamepad emulation
+                    NamedKey::ArrowUp => Some(30),    // up
+                    NamedKey::ArrowDown => Some(31),  // down
+                    NamedKey::ArrowLeft => Some(32),  // left
+                    NamedKey::ArrowRight => Some(33), // right
+                    NamedKey::Shift => Some(34),      // fire button
+                    _ => None,
+                },
+                Key::Character(key) => {
+                    if key.len() != 1 || !key.is_ascii() {
+                        return None;
+                    }
+                    match key.chars().next().unwrap().to_ascii_lowercase() {
+                        'q' => Some(0),
+                        'e' => Some(1),
+                        't' => Some(2),
+                        'u' => Some(3),
+                        'o' => Some(4),
+                        'a' => Some(5),
+                        'd' => Some(6),
+                        'g' => Some(7),
+                        'j' => Some(8),
+                        'l' => Some(9),
+                        // cody => 10
+                        'x' => Some(11),
+                        'v' => Some(12),
+                        'n' => Some(13),
+                        // meta => 14
+                        'z' => Some(15),
+                        'c' => Some(16),
+                        'b' => Some(17),
+                        'm' => Some(18),
+                        '\n' | '\r' => Some(19),
+                        's' => Some(20),
+                        'f' => Some(21),
+                        'h' => Some(22),
+                        'k' => Some(23),
+                        ' ' => Some(24),
+                        'w' => Some(25),
+                        'r' => Some(26),
+                        'y' => Some(27),
+                        'i' => Some(28),
+                        'p' => Some(29),
+                        _ => None,
+                    }
                 }
+                _ => None,
+            }
+        }
+
+        let mut state = [false; 40];
+        for key in input.text() {
+            let mut key = key.as_ref();
+            if let Some(main_key) = requires_cody_key(&key) {
+                state[10] |= true;
+                key = main_key;
+            } else if let Some(main_key) = requires_meta_key(&key) {
+                state[14] |= true;
+                key = main_key;
             }
 
-            let mut via_device = self.via_device.lock().unwrap();
-            via_device.set_pressed(cody_code, pressed);
-            via_device.set_pressed(10, !self.cody_mod_keys.is_empty());
-            via_device.set_pressed(14, !self.meta_mod_keys.is_empty());
+            if let Some(code) = cody_code(&key) {
+                state[code as usize] |= true;
+            }
+        }
+
+        let mut via_device = self.via_device.lock().unwrap();
+        for (code, pressed) in state.into_iter().enumerate() {
+            via_device.set_pressed(code as u8, pressed);
         }
     }
 }
