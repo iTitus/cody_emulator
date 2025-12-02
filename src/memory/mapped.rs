@@ -1,3 +1,4 @@
+use crate::interrupt::Interrupt;
 use crate::memory::Memory;
 
 #[derive(Default)]
@@ -12,6 +13,10 @@ impl MappedMemory {
 
     pub fn add_memory(&mut self, address: u16, size: u16, memory: impl Memory + 'static) {
         self.memories.push((address, size, Box::new(memory)));
+    }
+
+    pub fn add_device(&mut self, memory: impl Memory + 'static) {
+        self.add_memory(0, 0, memory);
     }
 }
 
@@ -37,5 +42,9 @@ impl Memory for MappedMemory {
                 return memory.write_u8(address - *start, value);
             }
         }
+    }
+
+    fn update(&mut self, _cycle: usize) -> Interrupt {
+        Interrupt::None
     }
 }

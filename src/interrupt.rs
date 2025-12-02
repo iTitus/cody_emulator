@@ -1,5 +1,12 @@
 use std::sync::{Arc, Mutex};
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Interrupt {
+    None,
+    Nmi,
+    Irq,
+}
+
 pub trait InterruptProvider {
     fn consume_irq(&mut self) -> bool;
     fn consume_nmi(&mut self) -> bool;

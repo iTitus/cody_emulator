@@ -1,3 +1,4 @@
+use crate::interrupt::Interrupt;
 use crate::memory::Memory;
 use crate::opcode::{AddressingMode, Opcode, get_instruction};
 use bitfields::bitfield;
@@ -38,16 +39,14 @@ pub struct Cpu<M> {
     pub p: Status,
     /// program counter
     pub pc: u16,
-    /// memory
+    /// memory/bus access
     pub memory: M,
     /// true if running
     run: bool,
-    /// waiting for interrupt
+    /// true if waiting for interrupt
     wai: bool,
-    /// pending IRQ
-    pending_irq: bool,
-    /// pending NMI
-    pending_nmi: bool,
+    /// cycles elapsed since turning on
+    cycle: usize,
 }
 
 impl<M: Memory> Cpu<M> {
@@ -62,8 +61,7 @@ impl<M: Memory> Cpu<M> {
             memory,
             run: false,
             wai: false,
-            pending_irq: false,
-            pending_nmi: false,
+            cycle: 0,
         };
         cpu.reset();
         cpu
@@ -78,8 +76,7 @@ impl<M: Memory> Cpu<M> {
         self.p = Status::default();
         self.pc = self.memory.read_u16(RESET_VECTOR);
         self.wai = false;
-        self.pending_irq = false;
-        self.pending_nmi = false;
+        self.cycle = 0;
     }
 
     pub fn run(&mut self) {
@@ -93,11 +90,10 @@ impl<M: Memory> Cpu<M> {
             return;
         }
 
-        let nmi = self.pending_nmi;
-        let irq = self.pending_irq;
+        let interrupt = self.memory.update(self.cycle);
+        let nmi = interrupt == Interrupt::Nmi;
+        let irq = interrupt == Interrupt::Irq;
         if nmi || irq {
-            self.pending_nmi = false;
-            self.pending_irq = false;
             self.wai = false;
             if nmi || (irq && !self.p.irqb_disable()) {
                 self.push_pc();
@@ -384,8 +380,12 @@ impl<M: Memory> Cpu<M> {
                     Opcode::TYA => self.set_a(self.y),
                     Opcode::WAI => self.wai = true,
                 }
+
+                self.cycle += opcode.cycles;
             } else {
                 // NOP
+                // TODO: implement undocumented opcodes with correct cycle count
+                self.cycle += 1;
             }
         }
     }

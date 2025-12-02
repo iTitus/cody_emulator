@@ -1,3 +1,4 @@
+use crate::interrupt::Interrupt;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -42,6 +43,8 @@ pub trait Memory {
         self.write_u8_zp(address, l);
         self.write_u8_zp(address.wrapping_add(1), h);
     }
+
+    fn update(&mut self, cycle: usize) -> Interrupt;
 }
 
 impl<M: Memory> Memory for Box<M> {
@@ -75,6 +78,10 @@ impl<M: Memory> Memory for Box<M> {
 
     fn write_u16_zp(&mut self, address: u8, value: u16) {
         (&mut **self).write_u16_zp(address, value);
+    }
+
+    fn update(&mut self, cycle: usize) -> Interrupt {
+        (&mut **self).update(cycle)
     }
 }
 
@@ -110,6 +117,10 @@ impl<M: Memory> Memory for Rc<RefCell<M>> {
     fn write_u16_zp(&mut self, address: u8, value: u16) {
         self.borrow_mut().write_u16_zp(address, value);
     }
+
+    fn update(&mut self, cycle: usize) -> Interrupt {
+        self.borrow_mut().update(cycle)
+    }
 }
 
 impl<M: Memory> Memory for Arc<Mutex<M>> {
@@ -143,5 +154,9 @@ impl<M: Memory> Memory for Arc<Mutex<M>> {
 
     fn write_u16_zp(&mut self, address: u8, value: u16) {
         self.lock().unwrap().write_u16_zp(address, value);
+    }
+
+    fn update(&mut self, cycle: usize) -> Interrupt {
+        self.lock().unwrap().update(cycle)
     }
 }

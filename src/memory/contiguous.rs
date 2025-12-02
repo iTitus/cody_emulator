@@ -1,3 +1,4 @@
+use crate::interrupt::Interrupt;
 use crate::memory::Memory;
 use std::io::Write;
 use std::marker::PhantomData;
@@ -86,5 +87,9 @@ impl<M: MemoryMode> Memory for Contiguous<M> {
         if M::is_writeable() {
             self.memory[address as usize % self.memory.len()] = value;
         }
+    }
+
+    fn update(&mut self, _cycle: usize) -> Interrupt {
+        Interrupt::None
     }
 }
