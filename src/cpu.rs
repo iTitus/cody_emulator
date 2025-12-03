@@ -85,9 +85,10 @@ impl<M: Memory> Cpu<M> {
         }
     }
 
-    pub fn step_instruction(&mut self) {
+    /// execute one instruction, returns the number of elapsed cycles
+    pub fn step_instruction(&mut self) -> usize {
         if !self.run {
-            return;
+            return 0;
         }
 
         let interrupt = self.memory.update(self.cycle);
@@ -109,7 +110,7 @@ impl<M: Memory> Cpu<M> {
         if !self.wai {
             let pc = self.pc;
             let opcode = get_instruction(self.read_u8_inc_pc());
-            if let Some(opcode) = opcode {
+            let cycles = if let Some(opcode) = opcode {
                 trace!("Executing opcode 0x{pc:04X} {opcode:?}");
                 match opcode.opcode {
                     Opcode::ADC => {
@@ -381,12 +382,19 @@ impl<M: Memory> Cpu<M> {
                     Opcode::WAI => self.wai = true,
                 }
 
-                self.cycle = self.cycle.wrapping_add(opcode.cycles);
+                opcode.cycles
             } else {
                 // TODO: implement undocumented opcodes with correct cycle count
-                self.cycle = self.cycle.wrapping_add(1);
-            }
+                1
+            };
+
+            self.cycle = self.cycle.wrapping_add(cycles);
+            return cycles;
         }
+
+        // cycles for WAI check
+        // TODO: find exact value
+        1
     }
 
     fn read_u8_inc_pc(&mut self) -> u8 {
