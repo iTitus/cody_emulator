@@ -12,6 +12,6 @@ impl Memory for ZeroMemory {
     fn write_u8(&mut self, _address: u16, _value: u8) {}
 
     fn update(&mut self, _cycle: usize) -> Interrupt {
-        Interrupt::None
+        Interrupt::none()
     }
 }

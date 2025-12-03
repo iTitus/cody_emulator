@@ -90,6 +90,6 @@ impl<M: MemoryMode> Memory for Contiguous<M> {
     }
 
     fn update(&mut self, _cycle: usize) -> Interrupt {
-        Interrupt::None
+        Interrupt::none()
     }
 }

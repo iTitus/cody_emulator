@@ -210,29 +210,18 @@ impl AssembledInstruction {
                 }
 
                 for candidate in candidates {
-                    // special handling for BRK
+                    // special handling for BRK with no argument
                     if candidate.opcode == Opcode::BRK
-                        && matches!(mode_1, AddressingMode::None | AddressingMode::Immediate)
+                        && matches!(mode_1, AddressingMode::None)
                         && mode_2 == AddressingMode::None
                         && parameter_2.is_none()
+                        && let Some(AssembledParameter::U8(_)) = parameter_1
                     {
-                        match parameter_1 {
-                            None => {
-                                return Ok(AssembledInstruction {
-                                    instruction: candidate,
-                                    parameter_1: Some(AssembledParameter::U8(0)),
-                                    parameter_2,
-                                });
-                            }
-                            Some(AssembledParameter::U8(_)) => {
-                                return Ok(AssembledInstruction {
-                                    instruction: candidate,
-                                    parameter_1,
-                                    parameter_2,
-                                });
-                            }
-                            _ => {}
-                        }
+                        return Ok(AssembledInstruction {
+                            instruction: candidate,
+                            parameter_1,
+                            parameter_2,
+                        });
                     }
 
                     // TODO: better matching for not exactly fitting addressing modes

@@ -35,7 +35,7 @@ impl Color {
     pub const PURPLE: Self = Self::rgb(0xcc0099);
     pub const CYAN: Self = Self::rgb(0x99ffd9);
     pub const ORANGE: Self = Self::rgb(0xffbf99);
-    pub const BROWN: Self = Self::rgb(0xcc4d0);
+    pub const BROWN: Self = Self::rgb(0xcc4d00);
     pub const GRAY: Self = Self::rgb(0x999999);
     pub const LIGHT_GRAY: Self = Self::rgb(0xcccccc);
     pub const DARK_GRAY: Self = Self::rgb(0x666666);

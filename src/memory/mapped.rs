@@ -44,7 +44,11 @@ impl Memory for MappedMemory {
         }
     }
 
-    fn update(&mut self, _cycle: usize) -> Interrupt {
-        Interrupt::None
+    fn update(&mut self, cycle: usize) -> Interrupt {
+        let mut interrupt = Interrupt::none();
+        for (_, _, memory) in &mut self.memories {
+            interrupt = interrupt.or(memory.update(cycle));
+        }
+        interrupt
     }
 }

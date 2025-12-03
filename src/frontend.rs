@@ -146,11 +146,8 @@ pub fn start(
     let uart2_device = Arc::new(Mutex::new(Uart::new(UART2_BASE)));
     memory.lock().unwrap().add_device(Arc::clone(&uart2_device));
 
-    let interrupt_provider = SimpleInterruptProvider::default();
-    let cpu = Cpu::new(memory, interrupt_provider);
-
     {
-        let mut cpu = Cpu::new(Arc::clone(&memory), Arc::clone(&interrupt_provider));
+        let mut cpu = Cpu::new(memory);
         info!("Starting cpu");
         thread::spawn(move || {
             cpu.run();
@@ -165,7 +162,6 @@ pub fn start(
             loop {
                 thread::sleep(Duration::from_secs_f64(1.0 / 60.0));
                 interrupt_trigger.trigger_irq();
-                println!("irq");
             }
         });
     }

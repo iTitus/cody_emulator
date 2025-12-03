@@ -212,11 +212,7 @@ pub struct InstructionMeta {
 
 impl InstructionMeta {
     pub fn parameter_width(&self) -> u16 {
-        if self.opcode == Opcode::BRK {
-            1
-        } else {
-            self.parameter_1.width() + self.parameter_2.width()
-        }
+        self.parameter_1.width() + self.parameter_2.width()
     }
 
     pub fn width(&self) -> u16 {
@@ -365,7 +361,7 @@ pub static OPCODES: [InstructionMeta; 212] = [
     Opcode::BNE.insn1(0xD0, AddressingMode::ProgramCounterRelative, 1),
     Opcode::BPL.insn1(0x10, AddressingMode::ProgramCounterRelative, 1),
     Opcode::BRA.insn1(0x80, AddressingMode::ProgramCounterRelative, 1),
-    Opcode::BRK.insn0(0x00, 1), // was Stack
+    Opcode::BRK.insn1(0x00, AddressingMode::Immediate, 1), // was Stack
     Opcode::BVC.insn1(0x50, AddressingMode::ProgramCounterRelative, 1),
     Opcode::BVS.insn1(0x70, AddressingMode::ProgramCounterRelative, 1),
     Opcode::CLC.insn0(0x18, 1), // was Implied

@@ -91,18 +91,18 @@ impl<M: Memory> Cpu<M> {
         }
 
         let interrupt = self.memory.update(self.cycle);
-        let nmi = interrupt == Interrupt::Nmi;
-        let irq = interrupt == Interrupt::Irq;
-        if nmi || irq {
+        if interrupt.is_nmi() || interrupt.is_irq() {
             self.wai = false;
-            if nmi || (irq && !self.p.irqb_disable()) {
+            if interrupt.is_nmi() || (interrupt.is_irq() && !self.p.irqb_disable()) {
                 self.push_pc();
                 self.push_flags_no_brk();
                 self.p.set_irqb_disable(true);
                 self.p.set_decimal_mode(false);
-                self.pc = self
-                    .memory
-                    .read_u16(if nmi { NMI_VECTOR } else { IRQ_VECTOR });
+                self.pc = self.memory.read_u16(if interrupt.is_nmi() {
+                    NMI_VECTOR
+                } else {
+                    IRQ_VECTOR
+                });
             }
         }
 
@@ -381,11 +381,10 @@ impl<M: Memory> Cpu<M> {
                     Opcode::WAI => self.wai = true,
                 }
 
-                self.cycle += opcode.cycles;
+                self.cycle = self.cycle.wrapping_add(opcode.cycles);
             } else {
-                // NOP
                 // TODO: implement undocumented opcodes with correct cycle count
-                self.cycle += 1;
+                self.cycle = self.cycle.wrapping_add(1);
             }
         }
     }
