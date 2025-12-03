@@ -202,16 +202,16 @@ impl<M: Memory> Vid<M> {
                         let sprite_data_start = sprite_bank_start.wrapping_add(4 * sprite_index);
 
                         let sprite_pos_x = memory.read_u8(sprite_data_start);
-                        let min_x = sprite_pos_x.saturating_sub(SPRITE_WIDTH) as u16;
-                        let max_x = sprite_pos_x as u16;
-                        if !(min_x..max_x).contains(&x) {
+                        let min_x = (sprite_pos_x as i16) - (SPRITE_WIDTH as i16);
+                        let max_x = sprite_pos_x as i16;
+                        if !(min_x..max_x).contains(&(x as i16)) {
                             continue;
                         }
 
                         let sprite_pos_y = memory.read_u8(sprite_data_start.wrapping_add(1));
-                        let min_y = sprite_pos_y.saturating_sub(SPRITE_HEIGHT) as u16;
-                        let max_y = sprite_pos_y as u16;
-                        if !(min_y..max_y).contains(&y) {
+                        let min_y = (sprite_pos_y as i16) - (SPRITE_HEIGHT as i16);
+                        let max_y = sprite_pos_y as i16;
+                        if !(min_y..max_y).contains(&(y as i16)) {
                             continue;
                         }
 
@@ -220,8 +220,8 @@ impl<M: Memory> Vid<M> {
                             0x40 * memory.read_u8(sprite_data_start.wrapping_add(3)) as u16,
                         );
 
-                        let in_sprite_x = (x - min_x) as u8;
-                        let in_sprite_y = (y - min_y) as u8;
+                        let in_sprite_x = (x as i16 - min_x) as u8;
+                        let in_sprite_y = (y as i16 - min_y) as u8;
                         let sprite_pixel_index = in_sprite_y * SPRITE_WIDTH + in_sprite_x;
                         let sprite_byte_index = sprite_pixel_index / 4;
                         let sprite_byte_bit_shift = 2 * (3 - (sprite_pixel_index % 4));
