@@ -1,19 +1,19 @@
 use crate::cpu;
 use crate::cpu::Cpu;
 use crate::device::keyboard::{Keyboard, KeyboardEmulation};
-use crate::device::uart::{UART1_BASE, UART2_BASE, Uart};
+use crate::device::uart::{Uart, UART1_BASE, UART2_BASE};
 use crate::device::via::Via;
-use crate::device::vid::{HEIGHT, Vid, WIDTH};
-use crate::interrupt::{InterruptTrigger, SimpleInterruptProvider};
-use crate::memory::Memory;
-use crate::memory::contiguous::{Contiguous, Ram};
+use crate::device::vid::{Vid, HEIGHT, WIDTH};
+use crate::memory::contiguous::Contiguous;
 use crate::memory::mapped::MappedMemory;
+use crate::memory::Memory;
 use log::{debug, info};
 use pixels::{Pixels, SurfaceTexture};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -139,7 +139,10 @@ pub fn start(
     memory.add_memory(0x0000, 0xA000, ram);
     memory.add_memory(0xA000, 0x4000, propeller_ram);
     memory.add_memory(0xE000, 0x2000, rom);
-    memory.add_memory(0x9F00, 0x0100, Via::default());
+
+    let via = Via::default();
+    let key_state = Rc::clone(via.get_key_state());
+    memory.add_memory(0x9F00, 0x0100, via);
 
     let uart1_device = Arc::new(Mutex::new(Uart::new(UART1_BASE)));
     memory.lock().unwrap().add_device(Arc::clone(&uart1_device));
