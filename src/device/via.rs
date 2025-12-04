@@ -1,7 +1,9 @@
 use crate::interrupt::Interrupt;
 use crate::memory::Memory;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::cell::RefCell;
 use std::rc::Rc;
+use strum::{EnumCount, IntoStaticStr};
 
 #[derive(Debug, Clone, Default)]
 pub struct Via {
@@ -82,14 +84,72 @@ impl Memory for Via {
     }
 }
 
+#[repr(u8)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    IntoPrimitive,
+    TryFromPrimitive,
+    EnumCount,
+    IntoStaticStr,
+)]
+pub enum CodyKeyCode {
+    KeyQ = 0,
+    KeyE = 1,
+    KeyT = 2,
+    KeyU = 3,
+    KeyO = 4,
+    KeyA = 5,
+    KeyD = 6,
+    KeyG = 7,
+    KeyJ = 8,
+    KeyL = 9,
+    Cody = 10,
+    KeyX = 11,
+    KeyV = 12,
+    KeyN = 13,
+    Meta = 14,
+    KeyZ = 15,
+    KeyC = 16,
+    KeyB = 17,
+    KeyM = 18,
+    Enter = 19,
+    KeyS = 20,
+    KeyF = 21,
+    KeyH = 22,
+    KeyK = 23,
+    Space = 24,
+    KeyW = 25,
+    KeyR = 26,
+    KeyY = 27,
+    KeyI = 28,
+    KeyP = 29,
+    Joystick1Up = 30,
+    Joystick1Down = 31,
+    Joystick1Left = 32,
+    Joystick1Right = 33,
+    Joystick1Fire = 34,
+    Joystick2Up = 35,
+    Joystick2Down = 36,
+    Joystick2Left = 37,
+    Joystick2Right = 38,
+    Joystick2Fire = 39,
+}
+
 #[derive(Debug, Copy, Clone, Default)]
 pub struct KeyState {
     state: [u8; 8],
 }
 
 impl KeyState {
-    pub fn set_pressed(&mut self, code: u8, pressed: bool) {
-        assert!(code < 40, "cody keycode out of bounds");
+    pub fn set_pressed(&mut self, code: CodyKeyCode, pressed: bool) {
+        let code = code as u8;
         let bit = (code % 5) + 3;
         let index = code / 5;
         let mask = 1 << bit;

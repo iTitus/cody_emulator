@@ -1,12 +1,12 @@
 use crate::cpu;
 use crate::cpu::Cpu;
 use crate::device::keyboard::{Keyboard, KeyboardEmulation};
-use crate::device::uart::{Uart, UART1_BASE, UART2_BASE};
+use crate::device::uart::{UART1_BASE, UART2_BASE, Uart};
 use crate::device::via::Via;
-use crate::device::vid::{Vid, HEIGHT, WIDTH};
+use crate::device::vid::{HEIGHT, Vid, WIDTH};
+use crate::memory::Memory;
 use crate::memory::contiguous::Contiguous;
 use crate::memory::mapped::MappedMemory;
-use crate::memory::Memory;
 use log::{debug, info};
 use pixels::{Pixels, SurfaceTexture};
 use std::collections::VecDeque;
@@ -243,7 +243,6 @@ pub fn start(
 
                 // reset blanking register to 1 for blanking interval
                 memory.write_u8(0xD000, 1);
-                println!("vblank");
                 thread::sleep(BLANKING_INTERVAL);
             }
         });
@@ -259,7 +258,7 @@ pub fn start(
             } else {
                 KeyboardEmulation::Logical
             },
-            via_device,
+            key_state,
         ))),
         last_frame: None,
         input: WinitInputHelper::new(),
@@ -330,7 +329,6 @@ impl<M: Memory> ApplicationHandler for App<M> {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.input.end_step();
-        // println!("step duration: {:?}", self.input.delta_time());
 
         if self.input.close_requested() || self.input.destroyed() {
             event_loop.exit();
@@ -338,7 +336,6 @@ impl<M: Memory> ApplicationHandler for App<M> {
         }
 
         self.keyboard_device.lock().unwrap().update(&self.input);
-        println!("key update");
 
         let Some(state) = &mut self.state else {
             return;

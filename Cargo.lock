@@ -405,6 +405,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "log",
+ "num_enum",
  "pixels",
  "strum",
  "thiserror 2.0.17",

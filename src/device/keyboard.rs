@@ -1,5 +1,7 @@
-use crate::device::via::Via;
-use std::sync::{Arc, Mutex};
+use crate::device::via::{CodyKeyCode, KeyState};
+use std::cell::RefCell;
+use std::rc::Rc;
+use strum::EnumCount;
 use winit::keyboard::{Key, KeyCode, NamedKey};
 use winit_input_helper::WinitInputHelper;
 
@@ -12,14 +14,14 @@ pub enum KeyboardEmulation {
 #[derive(Debug, Clone)]
 pub struct Keyboard {
     pub keyboard_emulation: KeyboardEmulation,
-    pub via_device: Arc<Mutex<Via>>,
+    pub key_state: Rc<RefCell<KeyState>>,
 }
 
 impl Keyboard {
-    pub fn new(keyboard_emulation: KeyboardEmulation, via_device: Arc<Mutex<Via>>) -> Self {
+    pub fn new(keyboard_emulation: KeyboardEmulation, key_state: Rc<RefCell<KeyState>>) -> Self {
         Self {
             keyboard_emulation,
-            via_device,
+            key_state,
         }
     }
 
@@ -31,56 +33,56 @@ impl Keyboard {
     }
 
     fn update_physical(&self, input: &WinitInputHelper) {
-        const MAPPING: [(KeyCode, u8); 38] = [
-            (KeyCode::KeyQ, 0),
-            (KeyCode::KeyE, 1),
-            (KeyCode::KeyT, 2),
-            (KeyCode::KeyU, 3),
-            (KeyCode::KeyO, 4),
-            (KeyCode::KeyA, 5),
-            (KeyCode::KeyD, 6),
-            (KeyCode::KeyG, 7),
-            (KeyCode::KeyJ, 8),
-            (KeyCode::KeyL, 9),
-            (KeyCode::ControlLeft, 10),  // cody modifier (makes numbers)
-            (KeyCode::ControlRight, 10), // cody modifier (makes numbers)
-            (KeyCode::KeyX, 11),
-            (KeyCode::KeyV, 12),
-            (KeyCode::KeyN, 13),
-            (KeyCode::AltLeft, 14),  // meta modifier (makes punctuation)
-            (KeyCode::AltRight, 14), // meta modifier (makes punctuation)
-            (KeyCode::KeyZ, 15),
-            (KeyCode::KeyC, 16),
-            (KeyCode::KeyB, 17),
-            (KeyCode::KeyM, 18),
-            (KeyCode::Enter, 19), // arrow key
-            (KeyCode::KeyS, 20),
-            (KeyCode::KeyF, 21),
-            (KeyCode::KeyH, 22),
-            (KeyCode::KeyK, 23),
-            (KeyCode::Space, 24),
-            (KeyCode::KeyW, 25),
-            (KeyCode::KeyR, 26),
-            (KeyCode::KeyY, 27),
-            (KeyCode::KeyI, 28),
-            (KeyCode::KeyP, 39),
-            // gamepad emulation
-            (KeyCode::ArrowUp, 30),    // up
-            (KeyCode::ArrowDown, 31),  // down
-            (KeyCode::ArrowLeft, 32),  // left
-            (KeyCode::ArrowRight, 33), // right
-            (KeyCode::ShiftLeft, 34),  // fire button
-            (KeyCode::ShiftRight, 34), // fire button
+        const MAPPING: [(KeyCode, CodyKeyCode); 38] = [
+            (KeyCode::KeyQ, CodyKeyCode::KeyQ),
+            (KeyCode::KeyE, CodyKeyCode::KeyE),
+            (KeyCode::KeyT, CodyKeyCode::KeyT),
+            (KeyCode::KeyU, CodyKeyCode::KeyU),
+            (KeyCode::KeyO, CodyKeyCode::KeyO),
+            (KeyCode::KeyA, CodyKeyCode::KeyA),
+            (KeyCode::KeyD, CodyKeyCode::KeyD),
+            (KeyCode::KeyG, CodyKeyCode::KeyG),
+            (KeyCode::KeyJ, CodyKeyCode::KeyJ),
+            (KeyCode::KeyL, CodyKeyCode::KeyL),
+            (KeyCode::ControlLeft, CodyKeyCode::Cody), // cody modifier (makes numbers)
+            (KeyCode::ControlRight, CodyKeyCode::Cody), // cody modifier (makes numbers)
+            (KeyCode::KeyX, CodyKeyCode::KeyX),
+            (KeyCode::KeyV, CodyKeyCode::KeyV),
+            (KeyCode::KeyN, CodyKeyCode::KeyN),
+            (KeyCode::AltLeft, CodyKeyCode::Meta), // meta modifier (makes punctuation)
+            (KeyCode::AltRight, CodyKeyCode::Meta), // meta modifier (makes punctuation)
+            (KeyCode::KeyZ, CodyKeyCode::KeyZ),
+            (KeyCode::KeyC, CodyKeyCode::KeyC),
+            (KeyCode::KeyB, CodyKeyCode::KeyB),
+            (KeyCode::KeyM, CodyKeyCode::KeyM),
+            (KeyCode::Enter, CodyKeyCode::Enter), // arrow key
+            (KeyCode::KeyS, CodyKeyCode::KeyS),
+            (KeyCode::KeyF, CodyKeyCode::KeyF),
+            (KeyCode::KeyH, CodyKeyCode::KeyH),
+            (KeyCode::KeyK, CodyKeyCode::KeyK),
+            (KeyCode::Space, CodyKeyCode::Space),
+            (KeyCode::KeyW, CodyKeyCode::KeyW),
+            (KeyCode::KeyR, CodyKeyCode::KeyR),
+            (KeyCode::KeyY, CodyKeyCode::KeyY),
+            (KeyCode::KeyI, CodyKeyCode::KeyI),
+            (KeyCode::KeyP, CodyKeyCode::KeyP),
+            // joystick emulation
+            (KeyCode::ArrowUp, CodyKeyCode::Joystick1Up), // up
+            (KeyCode::ArrowDown, CodyKeyCode::Joystick1Down), // down
+            (KeyCode::ArrowLeft, CodyKeyCode::Joystick1Left), // left
+            (KeyCode::ArrowRight, CodyKeyCode::Joystick1Right), // right
+            (KeyCode::ShiftLeft, CodyKeyCode::Joystick1Fire), // fire button
+            (KeyCode::ShiftRight, CodyKeyCode::Joystick1Fire), // fire button
         ];
 
-        let mut state = [false; 40];
+        let mut state = [false; CodyKeyCode::COUNT];
         for (keycode, code) in MAPPING {
             state[code as usize] |= input.key_held(keycode);
         }
 
-        let mut via_device = self.via_device.lock().unwrap();
+        let mut key_state = self.key_state.borrow_mut();
         for (code, pressed) in state.into_iter().enumerate() {
-            via_device.set_pressed(code as u8, pressed);
+            key_state.set_pressed((code as u8).try_into().unwrap(), pressed);
         }
     }
 
@@ -207,7 +209,8 @@ impl Keyboard {
             }
         }
 
-        let mut state = [false; 40];
+        let mut state = [false; CodyKeyCode::COUNT];
+        // TODO: use key_held_logical instead, this is not working
         for key in input.text() {
             let mut key = key.as_ref();
             if let Some(main_key) = requires_cody_key(&key) {
@@ -223,9 +226,9 @@ impl Keyboard {
             }
         }
 
-        let mut via_device = self.via_device.lock().unwrap();
+        let mut key_state = self.key_state.borrow_mut();
         for (code, pressed) in state.into_iter().enumerate() {
-            via_device.set_pressed(code as u8, pressed);
+            key_state.set_pressed((code as u8).try_into().unwrap(), pressed);
         }
     }
 }
