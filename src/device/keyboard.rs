@@ -1,4 +1,4 @@
-use crate::device::via::{CodyKeyCode, KeyState};
+use crate::device::via::{CodyKeyCode, CodyModifier, KeyState};
 use std::cell::RefCell;
 use std::rc::Rc;
 use strum::EnumCount;
@@ -87,141 +87,266 @@ impl Keyboard {
     }
 
     fn update_logical(&mut self, input: &WinitInputHelper) {
-        fn requires_cody_key(key: &Key<&str>) -> Option<Key<&'static str>> {
-            match key {
-                Key::Character(key) => {
-                    if key.len() != 1 || !key.is_ascii() {
-                        return None;
-                    }
-                    match key.chars().next().unwrap().to_ascii_lowercase() {
-                        '1' => Some(Key::Character("q")),
-                        '2' => Some(Key::Character("w")),
-                        '3' => Some(Key::Character("e")),
-                        '4' => Some(Key::Character("r")),
-                        '5' => Some(Key::Character("t")),
-                        '6' => Some(Key::Character("y")),
-                        '7' => Some(Key::Character("u")),
-                        '8' => Some(Key::Character("i")),
-                        '9' => Some(Key::Character("o")),
-                        '0' => Some(Key::Character("p")),
-                        _ => None,
-                    }
-                }
-                _ => None,
-            }
-        }
-
-        fn requires_meta_key(key: &Key<&str>) -> Option<Key<&'static str>> {
-            match key {
-                Key::Named(NamedKey::Backspace) => Some(Key::Named(NamedKey::Enter)),
-                Key::Character(key) => {
-                    if key.len() != 1 || !key.is_ascii() {
-                        return None;
-                    }
-                    match key.chars().next().unwrap().to_ascii_lowercase() {
-                        '!' => Some(Key::Character("q")),
-                        '"' => Some(Key::Character("w")),
-                        '#' => Some(Key::Character("e")),
-                        '$' => Some(Key::Character("r")),
-                        '%' => Some(Key::Character("t")),
-                        '^' => Some(Key::Character("y")),
-                        '&' => Some(Key::Character("u")),
-                        '*' => Some(Key::Character("i")),
-                        '(' => Some(Key::Character("o")),
-                        ')' => Some(Key::Character("p")),
-                        '@' => Some(Key::Character("a")),
-                        '=' => Some(Key::Character("s")),
-                        '-' => Some(Key::Character("d")),
-                        '+' => Some(Key::Character("f")),
-                        ':' => Some(Key::Character("g")),
-                        ';' => Some(Key::Character("h")),
-                        '\'' => Some(Key::Character("j")),
-                        '[' => Some(Key::Character("k")),
-                        ']' => Some(Key::Character("l")),
-                        '\\' => Some(Key::Character("z")),
-                        '<' => Some(Key::Character("x")),
-                        '>' => Some(Key::Character("c")),
-                        ',' => Some(Key::Character("v")),
-                        '.' => Some(Key::Character("b")),
-                        '?' => Some(Key::Character("n")),
-                        '/' => Some(Key::Character("m")),
-                        _ => None,
-                    }
-                }
-                _ => None,
-            }
-        }
-
-        fn cody_code(key: &Key<&str>) -> Option<u8> {
-            match key {
-                Key::Named(key) => match key {
-                    NamedKey::Control => Some(11), // cody modifier (makes numbers)
-                    NamedKey::Alt => Some(14),     // meta modifier (makes punctuation)
-                    NamedKey::Enter => Some(19),   // arrow key
-                    NamedKey::Space => Some(24),
-                    // gamepad emulation
-                    NamedKey::ArrowUp => Some(30),    // up
-                    NamedKey::ArrowDown => Some(31),  // down
-                    NamedKey::ArrowLeft => Some(32),  // left
-                    NamedKey::ArrowRight => Some(33), // right
-                    NamedKey::Shift => Some(34),      // fire button
-                    _ => None,
-                },
-                Key::Character(key) => {
-                    if key.len() != 1 || !key.is_ascii() {
-                        return None;
-                    }
-                    match key.chars().next().unwrap().to_ascii_lowercase() {
-                        'q' => Some(0),
-                        'e' => Some(1),
-                        't' => Some(2),
-                        'u' => Some(3),
-                        'o' => Some(4),
-                        'a' => Some(5),
-                        'd' => Some(6),
-                        'g' => Some(7),
-                        'j' => Some(8),
-                        'l' => Some(9),
-                        // cody => 10
-                        'x' => Some(11),
-                        'v' => Some(12),
-                        'n' => Some(13),
-                        // meta => 14
-                        'z' => Some(15),
-                        'c' => Some(16),
-                        'b' => Some(17),
-                        'm' => Some(18),
-                        '\n' | '\r' => Some(19),
-                        's' => Some(20),
-                        'f' => Some(21),
-                        'h' => Some(22),
-                        'k' => Some(23),
-                        ' ' => Some(24),
-                        'w' => Some(25),
-                        'r' => Some(26),
-                        'y' => Some(27),
-                        'i' => Some(28),
-                        'p' => Some(29),
-                        _ => None,
-                    }
-                }
-                _ => None,
-            }
-        }
+        const MAPPING: [(Key<&'static str>, CodyKeyCode, Option<CodyModifier>); 72] = [
+            (Key::Character("q"), CodyKeyCode::KeyQ, None),
+            (Key::Character("e"), CodyKeyCode::KeyE, None),
+            (Key::Character("t"), CodyKeyCode::KeyT, None),
+            (Key::Character("u"), CodyKeyCode::KeyU, None),
+            (Key::Character("o"), CodyKeyCode::KeyO, None),
+            (Key::Character("a"), CodyKeyCode::KeyA, None),
+            (Key::Character("d"), CodyKeyCode::KeyD, None),
+            (Key::Character("g"), CodyKeyCode::KeyG, None),
+            (Key::Character("j"), CodyKeyCode::KeyJ, None),
+            (Key::Character("l"), CodyKeyCode::KeyL, None),
+            (
+                Key::Named(NamedKey::Control),
+                CodyKeyCode::Cody,
+                Some(CodyModifier::Cody),
+            ),
+            (Key::Character("x"), CodyKeyCode::KeyX, None),
+            (Key::Character("v"), CodyKeyCode::KeyV, None),
+            (Key::Character("n"), CodyKeyCode::KeyN, None),
+            (
+                Key::Named(NamedKey::Alt),
+                CodyKeyCode::Meta,
+                Some(CodyModifier::Meta),
+            ),
+            (Key::Character("z"), CodyKeyCode::KeyZ, None),
+            (Key::Character("c"), CodyKeyCode::KeyC, None),
+            (Key::Character("b"), CodyKeyCode::KeyB, None),
+            (Key::Character("m"), CodyKeyCode::KeyM, None),
+            (Key::Named(NamedKey::Enter), CodyKeyCode::Enter, None),
+            (Key::Character("s"), CodyKeyCode::KeyS, None),
+            (Key::Character("f"), CodyKeyCode::KeyF, None),
+            (Key::Character("h"), CodyKeyCode::KeyH, None),
+            (Key::Character("k"), CodyKeyCode::KeyK, None),
+            (Key::Named(NamedKey::Space), CodyKeyCode::Space, None),
+            (Key::Character("w"), CodyKeyCode::KeyW, None),
+            (Key::Character("r"), CodyKeyCode::KeyR, None),
+            (Key::Character("y"), CodyKeyCode::KeyY, None),
+            (Key::Character("i"), CodyKeyCode::KeyI, None),
+            (Key::Character("p"), CodyKeyCode::KeyP, None),
+            (
+                Key::Named(NamedKey::ArrowUp),
+                CodyKeyCode::Joystick1Up,
+                None,
+            ),
+            (
+                Key::Named(NamedKey::ArrowDown),
+                CodyKeyCode::Joystick1Down,
+                None,
+            ),
+            (
+                Key::Named(NamedKey::ArrowLeft),
+                CodyKeyCode::Joystick1Left,
+                None,
+            ),
+            (
+                Key::Named(NamedKey::ArrowRight),
+                CodyKeyCode::Joystick1Right,
+                None,
+            ),
+            (
+                Key::Named(NamedKey::Shift),
+                CodyKeyCode::Joystick1Fire,
+                None,
+            ),
+            (
+                Key::Character("1"),
+                CodyKeyCode::KeyQ,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("2"),
+                CodyKeyCode::KeyW,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("3"),
+                CodyKeyCode::KeyE,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("4"),
+                CodyKeyCode::KeyR,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("5"),
+                CodyKeyCode::KeyT,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("6"),
+                CodyKeyCode::KeyY,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("7"),
+                CodyKeyCode::KeyU,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("8"),
+                CodyKeyCode::KeyI,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("9"),
+                CodyKeyCode::KeyO,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("0"),
+                CodyKeyCode::KeyP,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Named(NamedKey::Backspace),
+                CodyKeyCode::Enter,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("!"),
+                CodyKeyCode::KeyQ,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("\""),
+                CodyKeyCode::KeyW,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("#"),
+                CodyKeyCode::KeyE,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("$"),
+                CodyKeyCode::KeyR,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("%"),
+                CodyKeyCode::KeyT,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("^"),
+                CodyKeyCode::KeyY,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("&"),
+                CodyKeyCode::KeyU,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("*"),
+                CodyKeyCode::KeyI,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("("),
+                CodyKeyCode::KeyO,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character(")"),
+                CodyKeyCode::KeyP,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("@"),
+                CodyKeyCode::KeyA,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("="),
+                CodyKeyCode::KeyS,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("-"),
+                CodyKeyCode::KeyD,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("+"),
+                CodyKeyCode::KeyF,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character(":"),
+                CodyKeyCode::KeyG,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character(";"),
+                CodyKeyCode::KeyH,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("'"),
+                CodyKeyCode::KeyJ,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("["),
+                CodyKeyCode::KeyK,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("]"),
+                CodyKeyCode::KeyL,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("\\"),
+                CodyKeyCode::KeyZ,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("<"),
+                CodyKeyCode::KeyX,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character(">"),
+                CodyKeyCode::KeyC,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character(","),
+                CodyKeyCode::KeyV,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("."),
+                CodyKeyCode::KeyB,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("?"),
+                CodyKeyCode::KeyN,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("/"),
+                CodyKeyCode::KeyM,
+                Some(CodyModifier::Meta),
+            ),
+        ];
 
         let mut state = [false; CodyKeyCode::COUNT];
-        // TODO: use key_held_logical instead, this is not working
-        for key in input.text() {
-            let mut key = key.as_ref();
-            if let Some(main_key) = requires_cody_key(&key) {
-                state[10] |= true;
-                key = main_key;
-            } else if let Some(main_key) = requires_meta_key(&key) {
-                state[14] |= true;
-                key = main_key;
-            }
+        for (key, code, modifier) in MAPPING {
+            if input.key_held_logical(key) {
+                match modifier {
+                    Some(CodyModifier::Cody) => state[CodyKeyCode::Cody as usize] |= true,
+                    Some(CodyModifier::Meta) => state[CodyKeyCode::Meta as usize] |= true,
+                    _ => {}
+                }
 
-            if let Some(code) = cody_code(&key) {
                 state[code as usize] |= true;
             }
         }

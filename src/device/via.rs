@@ -160,3 +160,9 @@ impl KeyState {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
+pub enum CodyModifier {
+    Cody,
+    Meta,
+}
