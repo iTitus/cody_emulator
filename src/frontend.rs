@@ -2,7 +2,7 @@ use crate::cpu;
 use crate::cpu::Cpu;
 use crate::device::blanking::BlankingRegister;
 use crate::device::keyboard::{Keyboard, KeyboardEmulation};
-use crate::device::uart::{UART_END, UART1_BASE, UART2_BASE, Uart};
+use crate::device::uart::{UART_END, UART1_BASE, UART2_BASE, Uart, UartSource};
 use crate::device::via::Via;
 use crate::device::vid;
 use crate::device::vid::{HEIGHT, WIDTH};
@@ -12,7 +12,7 @@ use crate::memory::mapped::MappedMemory;
 use log::{info, trace};
 use pixels::{Pixels, SurfaceTexture};
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -33,8 +33,8 @@ pub fn start(
     reset_vector: Option<u16>,
     irq_vector: Option<u16>,
     nmi_vector: Option<u16>,
-    _uart1_source: Option<impl AsRef<Path>>,
-    _fix_newlines: bool,
+    uart1_source: Option<impl AsRef<Path>>,
+    fix_newlines: bool,
     physical_keyboard: bool,
 ) {
     let path = path.as_ref();
@@ -145,13 +145,34 @@ pub fn start(
     let key_state = Rc::clone(via.get_key_state());
     memory.add_memory(0x9F00, 0x0100, via);
 
-    let uart1 = Uart::default();
+    // TODO: better UART support
+    let uart1_data: Vec<u8> = if let Some(path) = uart1_source {
+        let f = File::open(path.as_ref()).unwrap();
+        let mut r = BufReader::new(f);
+        if fix_newlines {
+            let mut data = vec![];
+            for l in r.lines().map_while(Result::ok).filter(|l| !l.is_empty()) {
+                data.extend(l.bytes());
+                data.push(b'\n');
+            }
+            // CodyBASIC requires an empty line to terminate the LOAD command
+            data.push(b'\n');
+            data
+        } else {
+            let mut buf = vec![];
+            r.read_to_end(&mut buf).unwrap();
+            buf
+        }
+    } else {
+        vec![]
+    };
+    let uart1 = Uart::new(UartSource::new(uart1_data));
     let (_uart1_rx, _uart1_tx) = (
         Rc::clone(uart1.get_receive_buffer()),
         Rc::clone(uart1.get_transmit_buffer()),
     );
     memory.add_memory(UART1_BASE, UART_END, uart1);
-    let uart2 = Uart::default();
+    let uart2 = Uart::new(UartSource::empty());
     let (_uart2_rx, _uart2_tx) = (
         Rc::clone(uart2.get_receive_buffer()),
         Rc::clone(uart2.get_transmit_buffer()),
@@ -159,61 +180,6 @@ pub fn start(
     memory.add_memory(UART2_BASE, UART_END, uart2);
 
     memory.add_memory(0xD000, 0x1, BlankingRegister::default());
-
-    /*{
-        // TODO: better UART support
-        let mut uart1_source: VecDeque<u8> = if let Some(path) = uart1_source {
-            let f = File::open(path.as_ref()).unwrap();
-            let mut r = BufReader::new(f);
-            if fix_newlines {
-                let mut data = VecDeque::new();
-                for l in r.lines().map_while(Result::ok).filter(|l| !l.is_empty()) {
-                    data.extend(l.bytes());
-                    data.push_back(b'\n');
-                }
-                // CodyBASIC requires an empty line to terminate the LOAD command
-                data.push_back(b'\n');
-                data
-            } else {
-                let mut buf = vec![];
-                r.read_to_end(&mut buf).unwrap();
-                VecDeque::from(buf)
-            }
-        } else {
-            VecDeque::new()
-        };
-        let source_size = uart1_source.len();
-        info!("Starting UART thread");
-        thread::spawn(move || {
-            loop {
-                thread::sleep(Duration::from_secs_f64(7.0 / 19200.0));
-                let mut uart1 = uart1.lock().unwrap();
-                uart1.update_state();
-                if uart1.is_enabled() {
-                    // transmit
-                    while let Some(c) = uart1.transmit_buffer.pop() {
-                        // discard
-                        debug!("UART1 tx: {:?} ({c})", c as char);
-                    }
-
-                    // receive
-                    while !uart1.receive_buffer.is_full() {
-                        if let Some(value) = uart1_source.pop_front() {
-                            uart1.receive_buffer.push(value);
-                            debug!(
-                                "UART1 rx: push byte {:?} ({value}), remaining {}/{source_size}",
-                                value as char,
-                                uart1_source.len()
-                            )
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                drop(uart1);
-            }
-        });
-    }*/
 
     let mut app = App {
         state: None,

@@ -1,5 +1,6 @@
 use crate::interrupt::Interrupt;
 use crate::memory::Memory;
+use log::debug;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -36,16 +37,18 @@ pub struct Uart {
     status: u8,
     receive_buffer: Rc<RefCell<RingBuf>>,
     transmit_buffer: Rc<RefCell<RingBuf>>,
+    source: UartSource,
 }
 
 impl Uart {
-    pub fn new() -> Self {
+    pub fn new(source: UartSource) -> Self {
         Self {
             control: 0,
             command: 0,
             status: 0,
             receive_buffer: Default::default(),
             transmit_buffer: Default::default(),
+            source,
         }
     }
 
@@ -71,12 +74,6 @@ impl Uart {
 
     pub const fn get_transmit_buffer(&self) -> &Rc<RefCell<RingBuf>> {
         &self.transmit_buffer
-    }
-}
-
-impl Default for Uart {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -128,6 +125,37 @@ impl Memory for Uart {
     }
 
     fn update(&mut self, _cycle: usize) -> Interrupt {
+        // TODO: this is kinda hacky
+        self.update_state();
+        if self.is_enabled() {
+            // transmit
+            {
+                let mut tx = self.transmit_buffer.borrow_mut();
+                while let Some(c) = tx.pop() {
+                    // discard
+                    debug!("UART tx: {:?} ({c})", c as char);
+                }
+            }
+
+            // receive
+            {
+                let mut rx = self.receive_buffer.borrow_mut();
+                while !rx.is_full() {
+                    if let Some(value) = self.source.read() {
+                        rx.push(value);
+                        debug!(
+                            "UART rx: push byte {:?} ({value}), remaining {}/{}",
+                            value as char,
+                            self.source.pos(),
+                            self.source.len(),
+                        )
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
         Interrupt::none()
     }
 }
@@ -214,6 +242,54 @@ impl RingBuf {
 impl Default for RingBuf {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UartSource {
+    source: Vec<u8>,
+    pos: usize,
+}
+
+impl UartSource {
+    pub const fn empty() -> Self {
+        Self {
+            source: vec![],
+            pos: 0,
+        }
+    }
+
+    pub fn new(source: impl Into<Vec<u8>>) -> Self {
+        Self {
+            source: source.into(),
+            pos: 0,
+        }
+    }
+
+    pub const fn pos(&self) -> usize {
+        self.pos
+    }
+
+    pub const fn len(&self) -> usize {
+        self.source.len()
+    }
+
+    pub fn has_next(&self) -> bool {
+        self.pos < self.source.len()
+    }
+
+    pub fn read(&mut self) -> Option<u8> {
+        if self.has_next() {
+            let value = self.source[self.pos];
+            self.pos += 1;
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.pos = 0;
     }
 }
 

@@ -91,7 +91,7 @@ fn execute_test_case(test_case: &TestCase) {
     let cycles = cpu.step_instruction();
 
     assert_eq!(
-        cycles,
+        cycles as usize,
         test_case.cycles.len(),
         "cycles: expected={}, actual={}",
         test_case.cycles.len(),
