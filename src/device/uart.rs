@@ -1,4 +1,8 @@
-use crate::device::MemoryDevice;
+use crate::interrupt::Interrupt;
+use crate::memory::Memory;
+use log::debug;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 pub const UART1_BASE: u16 = 0xD480;
 pub const UART2_BASE: u16 = 0xD4A0;
@@ -24,27 +28,27 @@ const UART_RXBF: u16 = 8;
 /// Transmit ring buffer (8 bytes)
 const UART_TXBF: u16 = UART_RXBF + UART_BUFFER_SIZE;
 /// End location
-const UART_END: u16 = UART_TXBF + UART_BUFFER_SIZE;
+pub const UART_END: u16 = UART_TXBF + UART_BUFFER_SIZE;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct Uart {
-    base_address: u16,
     control: u8,
     command: u8,
     status: u8,
-    pub receive_buffer: RingBuf,
-    pub transmit_buffer: RingBuf,
+    receive_buffer: Rc<RefCell<RingBuf>>,
+    transmit_buffer: Rc<RefCell<RingBuf>>,
+    source: UartSource,
 }
 
 impl Uart {
-    pub const fn new(base_address: u16) -> Self {
+    pub fn new(source: UartSource) -> Self {
         Self {
-            base_address,
             control: 0,
             command: 0,
             status: 0,
-            receive_buffer: RingBuf::new(),
-            transmit_buffer: RingBuf::new(),
+            receive_buffer: Default::default(),
+            transmit_buffer: Default::default(),
+            source,
         }
     }
 
@@ -52,45 +56,51 @@ impl Uart {
         self.command & 0x1 != 0
     }
 
-    pub const fn update_state(&mut self) {
+    pub fn update_state(&mut self) {
         // set enable/disable status bit
         if self.command & 0x1 != 0 {
             // discard all errors and transmit/receive status
             self.status = 0x40;
         } else {
-            self.status = 0;
-            self.receive_buffer.set_head(0);
-            self.transmit_buffer.set_tail(0);
+            self.status = 0x0;
+            self.receive_buffer.borrow_mut().set_head(0);
+            self.transmit_buffer.borrow_mut().set_tail(0);
         }
+    }
+
+    pub const fn get_receive_buffer(&self) -> &Rc<RefCell<RingBuf>> {
+        &self.receive_buffer
+    }
+
+    pub const fn get_transmit_buffer(&self) -> &Rc<RefCell<RingBuf>> {
+        &self.transmit_buffer
     }
 }
 
-impl MemoryDevice for Uart {
-    fn read(&mut self, address: u16) -> Option<u8> {
-        if !(self.base_address..self.base_address + UART_END).contains(&address) {
-            return None;
-        }
-        let offset = address - self.base_address;
-        Some(match offset {
+impl Memory for Uart {
+    fn read_u8(&mut self, address: u16) -> u8 {
+        match address {
             UART_CNTL => self.control,
             UART_CMND => self.command,
             UART_STAT => self.status,
-            UART_RXHD => self.receive_buffer.head(),
-            UART_RXTL => self.receive_buffer.tail(),
-            UART_TXHD => self.transmit_buffer.head(),
-            UART_TXTL => self.transmit_buffer.tail(),
-            UART_RXBF..UART_TXBF => self.receive_buffer.get((offset - UART_RXBF) as u8),
-            UART_TXBF..UART_END => self.transmit_buffer.get((offset - UART_TXBF) as u8),
+            UART_RXHD => self.receive_buffer.borrow().head(),
+            UART_RXTL => self.receive_buffer.borrow().tail(),
+            UART_TXHD => self.transmit_buffer.borrow().head(),
+            UART_TXTL => self.transmit_buffer.borrow().tail(),
+            UART_RXBF..UART_TXBF => self
+                .receive_buffer
+                .borrow()
+                .get((address - UART_RXBF) as u8),
+            UART_TXBF..UART_END => self
+                .transmit_buffer
+                .borrow()
+                .get((address - UART_TXBF) as u8),
             _ => 0,
-        })
+        }
     }
 
-    fn write(&mut self, address: u16, value: u8) -> Option<()> {
-        if !(self.base_address..self.base_address + UART_END).contains(&address) {
-            return None;
-        }
-        let offset = address - self.base_address;
-        match offset {
+    fn write_u8(&mut self, address: u16, value: u8) {
+        match address {
             UART_CNTL => self.control = value,
             UART_CMND => {
                 self.command = value;
@@ -98,15 +108,55 @@ impl MemoryDevice for Uart {
             UART_STAT => {
                 // no-op
             }
-            UART_RXHD => self.receive_buffer.set_head(value),
-            UART_RXTL => self.receive_buffer.set_tail(value),
-            UART_TXHD => self.transmit_buffer.set_head(value),
-            UART_TXTL => self.transmit_buffer.set_tail(value),
-            UART_RXBF..UART_TXBF => self.receive_buffer.set((offset - UART_RXBF) as u8, value),
-            UART_TXBF..UART_END => self.transmit_buffer.set((offset - UART_TXBF) as u8, value),
+            UART_RXHD => self.receive_buffer.borrow_mut().set_head(value),
+            UART_RXTL => self.receive_buffer.borrow_mut().set_tail(value),
+            UART_TXHD => self.transmit_buffer.borrow_mut().set_head(value),
+            UART_TXTL => self.transmit_buffer.borrow_mut().set_tail(value),
+            UART_RXBF..UART_TXBF => self
+                .receive_buffer
+                .borrow_mut()
+                .set((address - UART_RXBF) as u8, value),
+            UART_TXBF..UART_END => self
+                .transmit_buffer
+                .borrow_mut()
+                .set((address - UART_TXBF) as u8, value),
             _ => {}
-        };
-        Some(())
+        }
+    }
+
+    fn update(&mut self, _cycle: usize) -> Interrupt {
+        // TODO: this is kinda hacky
+        self.update_state();
+        if self.is_enabled() {
+            // transmit
+            {
+                let mut tx = self.transmit_buffer.borrow_mut();
+                while let Some(c) = tx.pop() {
+                    // discard
+                    debug!("UART tx: {:?} ({c})", c as char);
+                }
+            }
+
+            // receive
+            {
+                let mut rx = self.receive_buffer.borrow_mut();
+                while !rx.is_full() {
+                    if let Some(value) = self.source.read() {
+                        rx.push(value);
+                        debug!(
+                            "UART rx: push byte {:?} ({value}), remaining {}/{}",
+                            value as char,
+                            self.source.pos(),
+                            self.source.len(),
+                        )
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Interrupt::none()
     }
 }
 
@@ -192,6 +242,58 @@ impl RingBuf {
 impl Default for RingBuf {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UartSource {
+    source: Vec<u8>,
+    pos: usize,
+}
+
+impl UartSource {
+    pub const fn empty() -> Self {
+        Self {
+            source: vec![],
+            pos: 0,
+        }
+    }
+
+    pub fn new(source: impl Into<Vec<u8>>) -> Self {
+        Self {
+            source: source.into(),
+            pos: 0,
+        }
+    }
+
+    pub const fn pos(&self) -> usize {
+        self.pos
+    }
+
+    pub const fn len(&self) -> usize {
+        self.source.len()
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.source.is_empty()
+    }
+
+    pub fn has_next(&self) -> bool {
+        self.pos < self.source.len()
+    }
+
+    pub fn read(&mut self) -> Option<u8> {
+        if self.has_next() {
+            let value = self.source[self.pos];
+            self.pos += 1;
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.pos = 0;
     }
 }
 

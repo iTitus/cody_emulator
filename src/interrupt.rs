@@ -1,80 +1,49 @@
-use std::sync::{Arc, Mutex};
-
-pub trait InterruptProvider {
-    fn consume_irq(&mut self) -> bool;
-    fn consume_nmi(&mut self) -> bool;
-}
-
-pub trait InterruptTrigger {
-    fn trigger_irq(&mut self);
-    fn trigger_nmi(&mut self);
-}
-
-impl<IP: InterruptProvider> InterruptProvider for Arc<Mutex<IP>> {
-    fn consume_irq(&mut self) -> bool {
-        self.lock().unwrap().consume_irq()
-    }
-
-    fn consume_nmi(&mut self) -> bool {
-        self.lock().unwrap().consume_nmi()
-    }
-}
-
-impl<IP: InterruptTrigger> InterruptTrigger for Arc<Mutex<IP>> {
-    fn trigger_irq(&mut self) {
-        self.lock().unwrap().trigger_irq();
-    }
-
-    fn trigger_nmi(&mut self) {
-        self.lock().unwrap().trigger_nmi();
-    }
-}
-
-#[derive(Debug, Copy, Clone, Default)]
-pub struct NoopInterruptProvider;
-
-impl InterruptProvider for NoopInterruptProvider {
-    fn consume_irq(&mut self) -> bool {
-        false
-    }
-
-    fn consume_nmi(&mut self) -> bool {
-        false
-    }
-}
-
-impl InterruptTrigger for NoopInterruptProvider {
-    fn trigger_irq(&mut self) {}
-
-    fn trigger_nmi(&mut self) {}
-}
-
-#[derive(Debug, Copy, Clone, Default)]
-pub struct SimpleInterruptProvider {
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub struct Interrupt {
     irq: bool,
     nmi: bool,
 }
 
-impl InterruptProvider for SimpleInterruptProvider {
-    fn consume_irq(&mut self) -> bool {
-        let value = self.irq;
-        self.irq = false;
-        value
+impl Interrupt {
+    pub fn none() -> Self {
+        Self {
+            irq: false,
+            nmi: false,
+        }
     }
 
-    fn consume_nmi(&mut self) -> bool {
-        let value = self.nmi;
-        self.nmi = false;
-        value
+    pub fn irq() -> Self {
+        Self {
+            irq: true,
+            nmi: false,
+        }
+    }
+
+    pub fn nmi() -> Self {
+        Self {
+            irq: false,
+            nmi: true,
+        }
+    }
+
+    pub fn is_irq(&self) -> bool {
+        self.irq
+    }
+
+    pub fn is_nmi(&self) -> bool {
+        self.nmi
+    }
+
+    pub fn or(self, other: Self) -> Self {
+        Self {
+            irq: self.irq | other.irq,
+            nmi: self.nmi | other.nmi,
+        }
     }
 }
 
-impl InterruptTrigger for SimpleInterruptProvider {
-    fn trigger_irq(&mut self) {
-        self.irq = true;
-    }
-
-    fn trigger_nmi(&mut self) {
-        self.nmi = true;
+impl Default for Interrupt {
+    fn default() -> Self {
+        Self::none()
     }
 }

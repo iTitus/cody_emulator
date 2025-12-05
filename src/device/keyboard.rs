@@ -1,8 +1,9 @@
-use crate::device::via::Via;
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
-use winit::event::KeyEvent;
-use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
+use crate::device::via::{CodyKeyCode, CodyModifier, KeyState};
+use std::cell::RefCell;
+use std::rc::Rc;
+use strum::EnumCount;
+use winit::keyboard::{Key, KeyCode, NamedKey};
+use winit_input_helper::WinitInputHelper;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum KeyboardEmulation {
@@ -13,316 +14,346 @@ pub enum KeyboardEmulation {
 #[derive(Debug, Clone)]
 pub struct Keyboard {
     pub keyboard_emulation: KeyboardEmulation,
-    pub via_device: Arc<Mutex<Via>>,
-    cody_mod_keys: HashSet<u8>,
-    meta_mod_keys: HashSet<u8>,
+    pub key_state: Rc<RefCell<KeyState>>,
 }
 
 impl Keyboard {
-    pub fn new(keyboard_emulation: KeyboardEmulation, via_device: Arc<Mutex<Via>>) -> Self {
+    pub fn new(keyboard_emulation: KeyboardEmulation, key_state: Rc<RefCell<KeyState>>) -> Self {
         Self {
             keyboard_emulation,
-            via_device,
-            cody_mod_keys: Default::default(),
-            meta_mod_keys: Default::default(),
+            key_state,
         }
     }
 
-    pub fn on_keyboard_event(&mut self, event: KeyEvent) {
+    pub fn update(&mut self, input: &WinitInputHelper) {
         match self.keyboard_emulation {
-            KeyboardEmulation::Physical => self.on_keyboard_input_physical(event),
-            KeyboardEmulation::Logical => self.on_keyboard_input_logical(event),
+            KeyboardEmulation::Physical => self.update_physical(input),
+            KeyboardEmulation::Logical => self.update_logical(input),
         }
     }
 
-    fn on_keyboard_input_physical(&self, event: KeyEvent) {
-        let PhysicalKey::Code(code) = event.physical_key else {
-            return;
-        };
-        let pressed = event.state.is_pressed();
-        let cody_code = match code {
-            KeyCode::KeyQ => 1,
-            KeyCode::KeyE => 2,
-            KeyCode::KeyT => 3,
-            KeyCode::KeyU => 4,
-            KeyCode::KeyO => 5,
-            KeyCode::KeyA => 6,
-            KeyCode::KeyD => 7,
-            KeyCode::KeyG => 8,
-            KeyCode::KeyJ => 9,
-            KeyCode::KeyL => 10,
-            KeyCode::ControlLeft | KeyCode::ControlRight => 11, // cody modifier (makes numbers)
-            KeyCode::KeyX => 12,
-            KeyCode::KeyV => 13,
-            KeyCode::KeyN => 14,
-            KeyCode::AltLeft | KeyCode::AltRight => 15, // meta modifier (makes punctuation)
-            KeyCode::KeyZ => 16,
-            KeyCode::KeyC => 17,
-            KeyCode::KeyB => 18,
-            KeyCode::KeyM => 19,
-            KeyCode::Enter => 20, // arrow key
-            KeyCode::KeyS => 21,
-            KeyCode::KeyF => 22,
-            KeyCode::KeyH => 23,
-            KeyCode::KeyK => 24,
-            KeyCode::Space => 25,
-            KeyCode::KeyW => 26,
-            KeyCode::KeyR => 27,
-            KeyCode::KeyY => 28,
-            KeyCode::KeyI => 29,
-            KeyCode::KeyP => 30,
-            // gamepad emulation
-            KeyCode::ArrowUp => 31,                         // up
-            KeyCode::ArrowDown => 32,                       // down
-            KeyCode::ArrowLeft => 33,                       // left
-            KeyCode::ArrowRight => 34,                      // right
-            KeyCode::ShiftLeft | KeyCode::ShiftRight => 35, // fire button
-            _ => 0,
-        };
-        if cody_code > 0 {
-            let mut via_device = self.via_device.lock().unwrap();
-            via_device.set_pressed(cody_code - 1, pressed);
+    fn update_physical(&self, input: &WinitInputHelper) {
+        const MAPPING: [(KeyCode, CodyKeyCode); 38] = [
+            (KeyCode::KeyQ, CodyKeyCode::KeyQ),
+            (KeyCode::KeyE, CodyKeyCode::KeyE),
+            (KeyCode::KeyT, CodyKeyCode::KeyT),
+            (KeyCode::KeyU, CodyKeyCode::KeyU),
+            (KeyCode::KeyO, CodyKeyCode::KeyO),
+            (KeyCode::KeyA, CodyKeyCode::KeyA),
+            (KeyCode::KeyD, CodyKeyCode::KeyD),
+            (KeyCode::KeyG, CodyKeyCode::KeyG),
+            (KeyCode::KeyJ, CodyKeyCode::KeyJ),
+            (KeyCode::KeyL, CodyKeyCode::KeyL),
+            (KeyCode::ControlLeft, CodyKeyCode::Cody), // cody modifier (makes numbers)
+            (KeyCode::ControlRight, CodyKeyCode::Cody), // cody modifier (makes numbers)
+            (KeyCode::KeyX, CodyKeyCode::KeyX),
+            (KeyCode::KeyV, CodyKeyCode::KeyV),
+            (KeyCode::KeyN, CodyKeyCode::KeyN),
+            (KeyCode::AltLeft, CodyKeyCode::Meta), // meta modifier (makes punctuation)
+            (KeyCode::AltRight, CodyKeyCode::Meta), // meta modifier (makes punctuation)
+            (KeyCode::KeyZ, CodyKeyCode::KeyZ),
+            (KeyCode::KeyC, CodyKeyCode::KeyC),
+            (KeyCode::KeyB, CodyKeyCode::KeyB),
+            (KeyCode::KeyM, CodyKeyCode::KeyM),
+            (KeyCode::Enter, CodyKeyCode::Enter), // arrow key
+            (KeyCode::KeyS, CodyKeyCode::KeyS),
+            (KeyCode::KeyF, CodyKeyCode::KeyF),
+            (KeyCode::KeyH, CodyKeyCode::KeyH),
+            (KeyCode::KeyK, CodyKeyCode::KeyK),
+            (KeyCode::Space, CodyKeyCode::Space),
+            (KeyCode::KeyW, CodyKeyCode::KeyW),
+            (KeyCode::KeyR, CodyKeyCode::KeyR),
+            (KeyCode::KeyY, CodyKeyCode::KeyY),
+            (KeyCode::KeyI, CodyKeyCode::KeyI),
+            (KeyCode::KeyP, CodyKeyCode::KeyP),
+            // joystick emulation
+            (KeyCode::ArrowUp, CodyKeyCode::Joystick1Up), // up
+            (KeyCode::ArrowDown, CodyKeyCode::Joystick1Down), // down
+            (KeyCode::ArrowLeft, CodyKeyCode::Joystick1Left), // left
+            (KeyCode::ArrowRight, CodyKeyCode::Joystick1Right), // right
+            (KeyCode::ShiftLeft, CodyKeyCode::Joystick1Fire), // fire button
+            (KeyCode::ShiftRight, CodyKeyCode::Joystick1Fire), // fire button
+        ];
+
+        let mut state = [false; CodyKeyCode::COUNT];
+        for (keycode, code) in MAPPING {
+            state[code as usize] |= input.key_held(keycode);
+        }
+
+        let mut key_state = self.key_state.borrow_mut();
+        for (code, pressed) in state.into_iter().enumerate() {
+            key_state.set_pressed((code as u8).try_into().unwrap(), pressed);
         }
     }
 
-    fn on_keyboard_input_logical(&mut self, event: KeyEvent) {
-        let key = event.logical_key;
-        let pressed = event.state.is_pressed();
-        let mut cody_mod = false;
-        let mut meta_mod = false;
-        let cody_code = match key {
-            Key::Named(key) => match key {
-                NamedKey::Control => {
-                    cody_mod = true;
-                    11 // cody modifier (makes numbers)
-                }
-                NamedKey::Alt => {
-                    meta_mod = true;
-                    15 // meta modifier (makes punctuation)
-                }
-                NamedKey::Enter => 20, // arrow key
-                NamedKey::Backspace => {
-                    meta_mod = true;
-                    20 // with arrow key
-                }
-                NamedKey::Space => 25,
-                // gamepad emulation
-                NamedKey::ArrowUp => 31,    // up
-                NamedKey::ArrowDown => 32,  // down
-                NamedKey::ArrowLeft => 33,  // left
-                NamedKey::ArrowRight => 34, // right
-                NamedKey::Shift => 35,      // fire button
-                _ => 0,
-            },
-            Key::Character(c) => {
-                if !c.is_ascii() || c.len() != 1 {
-                    0
-                } else {
-                    let mut c = c.chars().next().unwrap().to_ascii_lowercase();
-                    match c {
-                        '1' => {
-                            cody_mod = true;
-                            c = 'q';
-                        }
-                        '2' => {
-                            cody_mod = true;
-                            c = 'w';
-                        }
-                        '3' => {
-                            cody_mod = true;
-                            c = 'e';
-                        }
-                        '4' => {
-                            cody_mod = true;
-                            c = 'r';
-                        }
-                        '5' => {
-                            cody_mod = true;
-                            c = 't';
-                        }
-                        '6' => {
-                            cody_mod = true;
-                            c = 'y';
-                        }
-                        '7' => {
-                            cody_mod = true;
-                            c = 'u';
-                        }
-                        '8' => {
-                            cody_mod = true;
-                            c = 'i';
-                        }
-                        '9' => {
-                            cody_mod = true;
-                            c = 'o';
-                        }
-                        '0' => {
-                            cody_mod = true;
-                            c = 'p';
-                        }
-                        '!' => {
-                            meta_mod = true;
-                            c = 'q';
-                        }
-                        '"' => {
-                            meta_mod = true;
-                            c = 'w';
-                        }
-                        '#' => {
-                            meta_mod = true;
-                            c = 'e';
-                        }
-                        '$' => {
-                            meta_mod = true;
-                            c = 'r';
-                        }
-                        '%' => {
-                            meta_mod = true;
-                            c = 't';
-                        }
-                        '^' => {
-                            meta_mod = true;
-                            c = 'y';
-                        }
-                        '&' => {
-                            meta_mod = true;
-                            c = 'u';
-                        }
-                        '*' => {
-                            meta_mod = true;
-                            c = 'i';
-                        }
-                        '(' => {
-                            meta_mod = true;
-                            c = 'o';
-                        }
-                        ')' => {
-                            meta_mod = true;
-                            c = 'p';
-                        }
-                        '@' => {
-                            meta_mod = true;
-                            c = 'a';
-                        }
-                        '=' => {
-                            meta_mod = true;
-                            c = 's';
-                        }
-                        '-' => {
-                            meta_mod = true;
-                            c = 's';
-                        }
-                        '+' => {
-                            meta_mod = true;
-                            c = 'f';
-                        }
-                        ':' => {
-                            meta_mod = true;
-                            c = 'g';
-                        }
-                        ';' => {
-                            meta_mod = true;
-                            c = 'h';
-                        }
-                        '\'' => {
-                            meta_mod = true;
-                            c = 'j';
-                        }
-                        '[' => {
-                            meta_mod = true;
-                            c = 'k';
-                        }
-                        ']' => {
-                            meta_mod = true;
-                            c = 'l';
-                        }
-                        '\\' => {
-                            meta_mod = true;
-                            c = 'z';
-                        }
-                        '<' => {
-                            meta_mod = true;
-                            c = 'x';
-                        }
-                        '>' => {
-                            meta_mod = true;
-                            c = 'c';
-                        }
-                        ',' => {
-                            meta_mod = true;
-                            c = 'v';
-                        }
-                        '.' => {
-                            meta_mod = true;
-                            c = 'b';
-                        }
-                        '?' => {
-                            meta_mod = true;
-                            c = 'n';
-                        }
-                        '/' => {
-                            meta_mod = true;
-                            c = 'm';
-                        }
-                        _ => {}
-                    }
+    fn update_logical(&mut self, input: &WinitInputHelper) {
+        const MAPPING: [(Key<&'static str>, CodyKeyCode, Option<CodyModifier>); 72] = [
+            (Key::Character("q"), CodyKeyCode::KeyQ, None),
+            (Key::Character("e"), CodyKeyCode::KeyE, None),
+            (Key::Character("t"), CodyKeyCode::KeyT, None),
+            (Key::Character("u"), CodyKeyCode::KeyU, None),
+            (Key::Character("o"), CodyKeyCode::KeyO, None),
+            (Key::Character("a"), CodyKeyCode::KeyA, None),
+            (Key::Character("d"), CodyKeyCode::KeyD, None),
+            (Key::Character("g"), CodyKeyCode::KeyG, None),
+            (Key::Character("j"), CodyKeyCode::KeyJ, None),
+            (Key::Character("l"), CodyKeyCode::KeyL, None),
+            (
+                Key::Named(NamedKey::Control),
+                CodyKeyCode::Cody,
+                Some(CodyModifier::Cody),
+            ),
+            (Key::Character("x"), CodyKeyCode::KeyX, None),
+            (Key::Character("v"), CodyKeyCode::KeyV, None),
+            (Key::Character("n"), CodyKeyCode::KeyN, None),
+            (
+                Key::Named(NamedKey::Alt),
+                CodyKeyCode::Meta,
+                Some(CodyModifier::Meta),
+            ),
+            (Key::Character("z"), CodyKeyCode::KeyZ, None),
+            (Key::Character("c"), CodyKeyCode::KeyC, None),
+            (Key::Character("b"), CodyKeyCode::KeyB, None),
+            (Key::Character("m"), CodyKeyCode::KeyM, None),
+            (Key::Named(NamedKey::Enter), CodyKeyCode::Enter, None),
+            (Key::Character("s"), CodyKeyCode::KeyS, None),
+            (Key::Character("f"), CodyKeyCode::KeyF, None),
+            (Key::Character("h"), CodyKeyCode::KeyH, None),
+            (Key::Character("k"), CodyKeyCode::KeyK, None),
+            (Key::Named(NamedKey::Space), CodyKeyCode::Space, None),
+            (Key::Character("w"), CodyKeyCode::KeyW, None),
+            (Key::Character("r"), CodyKeyCode::KeyR, None),
+            (Key::Character("y"), CodyKeyCode::KeyY, None),
+            (Key::Character("i"), CodyKeyCode::KeyI, None),
+            (Key::Character("p"), CodyKeyCode::KeyP, None),
+            (
+                Key::Named(NamedKey::ArrowUp),
+                CodyKeyCode::Joystick1Up,
+                None,
+            ),
+            (
+                Key::Named(NamedKey::ArrowDown),
+                CodyKeyCode::Joystick1Down,
+                None,
+            ),
+            (
+                Key::Named(NamedKey::ArrowLeft),
+                CodyKeyCode::Joystick1Left,
+                None,
+            ),
+            (
+                Key::Named(NamedKey::ArrowRight),
+                CodyKeyCode::Joystick1Right,
+                None,
+            ),
+            (
+                Key::Named(NamedKey::Shift),
+                CodyKeyCode::Joystick1Fire,
+                None,
+            ),
+            (
+                Key::Character("1"),
+                CodyKeyCode::KeyQ,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("2"),
+                CodyKeyCode::KeyW,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("3"),
+                CodyKeyCode::KeyE,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("4"),
+                CodyKeyCode::KeyR,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("5"),
+                CodyKeyCode::KeyT,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("6"),
+                CodyKeyCode::KeyY,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("7"),
+                CodyKeyCode::KeyU,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("8"),
+                CodyKeyCode::KeyI,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("9"),
+                CodyKeyCode::KeyO,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Character("0"),
+                CodyKeyCode::KeyP,
+                Some(CodyModifier::Cody),
+            ),
+            (
+                Key::Named(NamedKey::Backspace),
+                CodyKeyCode::Enter,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("!"),
+                CodyKeyCode::KeyQ,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("\""),
+                CodyKeyCode::KeyW,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("#"),
+                CodyKeyCode::KeyE,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("$"),
+                CodyKeyCode::KeyR,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("%"),
+                CodyKeyCode::KeyT,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("^"),
+                CodyKeyCode::KeyY,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("&"),
+                CodyKeyCode::KeyU,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("*"),
+                CodyKeyCode::KeyI,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("("),
+                CodyKeyCode::KeyO,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character(")"),
+                CodyKeyCode::KeyP,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("@"),
+                CodyKeyCode::KeyA,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("="),
+                CodyKeyCode::KeyS,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("-"),
+                CodyKeyCode::KeyD,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("+"),
+                CodyKeyCode::KeyF,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character(":"),
+                CodyKeyCode::KeyG,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character(";"),
+                CodyKeyCode::KeyH,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("'"),
+                CodyKeyCode::KeyJ,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("["),
+                CodyKeyCode::KeyK,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("]"),
+                CodyKeyCode::KeyL,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("\\"),
+                CodyKeyCode::KeyZ,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("<"),
+                CodyKeyCode::KeyX,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character(">"),
+                CodyKeyCode::KeyC,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character(","),
+                CodyKeyCode::KeyV,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("."),
+                CodyKeyCode::KeyB,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("?"),
+                CodyKeyCode::KeyN,
+                Some(CodyModifier::Meta),
+            ),
+            (
+                Key::Character("/"),
+                CodyKeyCode::KeyM,
+                Some(CodyModifier::Meta),
+            ),
+        ];
 
-                    match c {
-                        'q' => 1,
-                        'e' => 2,
-                        't' => 3,
-                        'u' => 4,
-                        'o' => 5,
-                        'a' => 6,
-                        'd' => 7,
-                        'g' => 8,
-                        'j' => 9,
-                        'l' => 10,
-                        'x' => 12,
-                        'v' => 13,
-                        'n' => 14,
-                        'z' => 16,
-                        'c' => 17,
-                        'b' => 18,
-                        'm' => 19,
-                        '\n' | '\r' => 20,
-                        's' => 21,
-                        'f' => 22,
-                        'h' => 23,
-                        'k' => 24,
-                        ' ' => 25,
-                        'w' => 26,
-                        'r' => 27,
-                        'y' => 28,
-                        'i' => 29,
-                        'p' => 30,
-                        _ => 0,
-                    }
+        let mut state = [false; CodyKeyCode::COUNT];
+        for (key, code, modifier) in MAPPING {
+            if input.key_held_logical(key) {
+                match modifier {
+                    Some(CodyModifier::Cody) => state[CodyKeyCode::Cody as usize] |= true,
+                    Some(CodyModifier::Meta) => state[CodyKeyCode::Meta as usize] |= true,
+                    _ => {}
                 }
-            }
-            _ => 0,
-        };
-        if cody_code > 0 {
-            let cody_code = cody_code - 1;
-            if cody_mod {
-                if pressed {
-                    self.cody_mod_keys.insert(cody_code);
-                } else {
-                    self.cody_mod_keys.remove(&cody_code);
-                }
-            }
-            if meta_mod {
-                if pressed {
-                    self.meta_mod_keys.insert(cody_code);
-                } else {
-                    self.meta_mod_keys.remove(&cody_code);
-                }
-            }
 
-            let mut via_device = self.via_device.lock().unwrap();
-            via_device.set_pressed(cody_code, pressed);
-            via_device.set_pressed(10, !self.cody_mod_keys.is_empty());
-            via_device.set_pressed(14, !self.meta_mod_keys.is_empty());
+                state[code as usize] |= true;
+            }
+        }
+
+        let mut key_state = self.key_state.borrow_mut();
+        for (code, pressed) in state.into_iter().enumerate() {
+            key_state.set_pressed((code as u8).try_into().unwrap(), pressed);
         }
     }
 }

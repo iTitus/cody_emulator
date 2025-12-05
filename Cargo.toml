@@ -19,15 +19,15 @@ env_logger = "0.11"
 itertools = "0.14"
 lazy_static = "1.5"
 log = "0.4"
+num_enum = "0.7"
 strum = { version = "0.27", features = ["derive"] }
 thiserror = "2"
 
 # graphics
 bytemuck = { version = "1.24", features = ["derive"] }
-glam = { version = "0.30", features = ["bytemuck"] }
-pollster = "0.4"
-wgpu = "27.0"
+pixels = "0.15"
 winit = "0.30"
+winit_input_helper = "0.17"
 
 [profile.release]
 lto = true

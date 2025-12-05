@@ -1,7 +1,7 @@
 use clap::Parser;
 use clap_num::maybe_hex;
 use cody_emulator::assembler::disassemble;
-use cody_emulator::device::vid;
+use cody_emulator::frontend;
 use std::env;
 use std::path::PathBuf;
 
@@ -67,7 +67,7 @@ pub fn main() {
     }
     env_logger::init();
 
-    vid::start(
+    frontend::start(
         &cli.file,
         cli.as_cartridge,
         cli.load_address,
