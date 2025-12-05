@@ -36,6 +36,7 @@ pub fn start(
     uart1_source: Option<impl AsRef<Path>>,
     fix_newlines: bool,
     physical_keyboard: bool,
+    fast: bool,
 ) {
     let path = path.as_ref();
     info!(
@@ -192,6 +193,7 @@ pub fn start(
             },
             key_state,
         ),
+        fast,
         last_frame_start: Instant::now(),
         input: WinitInputHelper::new(),
     };
@@ -206,6 +208,7 @@ struct App<M> {
     state: Option<State>,
     cpu: Cpu<M>,
     keyboard: Keyboard,
+    fast: bool,
     last_frame_start: Instant,
     input: WinitInputHelper,
 }
@@ -282,26 +285,47 @@ impl<M: Memory> ApplicationHandler for App<M> {
         const FPS: f64 = 60.0 / 1.001;
         const FRAME_NANOS: f64 = FPS / 1000000000.0;
         const FRAME_DURATION: Duration = Duration::from_nanos((1.0 / FRAME_NANOS) as u64);
+        const _: () = assert!(FRAME_DURATION.as_nanos() > 0);
 
-        // lock to ~60 fps
-        let elapsed = self.last_frame_start.elapsed();
-        if elapsed < FRAME_DURATION {
-            sleep(FRAME_DURATION - elapsed);
-        }
+        let mut total_cycles = 0;
+        let mut total_instructions = 0usize;
+        let frame_time = if self.fast {
+            while self.last_frame_start.elapsed() < FRAME_DURATION {
+                total_cycles += self.cpu.step_instruction() as usize;
+                total_instructions += 1;
+            }
+            let elapsed = self.last_frame_start.elapsed();
+            self.last_frame_start = Instant::now();
+            elapsed
+        } else {
+            // sleep to get to ~60 fps
+            let elapsed = self.last_frame_start.elapsed();
+            if elapsed < FRAME_DURATION {
+                sleep(FRAME_DURATION - elapsed);
+            }
 
-        const CYCLE_FREQUENCY: f64 = 1000000.0;
-        const CYCLE_FREQUENCY_NANOS: f64 = CYCLE_FREQUENCY / 1000000000.0;
-        const CYCLE_DURATION: Duration = Duration::from_nanos((1.0 / CYCLE_FREQUENCY_NANOS) as u64);
-        const _: () = assert!(CYCLE_DURATION.as_nanos() > 0);
+            const CYCLE_FREQUENCY: f64 = 1000000.0;
+            const CYCLE_FREQUENCY_NANOS: f64 = CYCLE_FREQUENCY / 1000000000.0;
+            const CYCLE_DURATION: Duration =
+                Duration::from_nanos((1.0 / CYCLE_FREQUENCY_NANOS) as u64);
+            const _: () = assert!(CYCLE_DURATION.as_nanos() > 0);
 
-        let now = Instant::now();
-        let realtime_elapsed = now - self.last_frame_start;
-        trace!("frame time: {realtime_elapsed:?}");
-        self.last_frame_start = now;
-        let mut catchup = Duration::ZERO;
-        while catchup < realtime_elapsed {
-            catchup += CYCLE_DURATION * self.cpu.step_instruction() as u32;
-        }
+            let now = Instant::now();
+            let realtime_elapsed = now - self.last_frame_start;
+            self.last_frame_start = now;
+            let mut catchup = Duration::ZERO;
+            while catchup < realtime_elapsed {
+                let cycles = self.cpu.step_instruction();
+                total_cycles += cycles as usize;
+                total_instructions += 1;
+                catchup += CYCLE_DURATION * cycles as u32;
+            }
+
+            realtime_elapsed
+        };
+        trace!(
+            "frame time: {frame_time:?}, instructions: {total_instructions}, cycles: {total_cycles}"
+        );
 
         state.window.request_redraw();
     }

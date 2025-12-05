@@ -40,6 +40,9 @@ Options:
       --physical-keyboard
           Emulate the keyboard by physically mapping the cody keyboard, without respecting the host's layout
 
+      --fast
+          Run the cpu as fast as possible
+
   -v, --verbose...
           Each time this option is added increases the default logging level
 
