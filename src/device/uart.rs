@@ -274,6 +274,10 @@ impl UartSource {
         self.source.len()
     }
 
+    pub const fn is_empty(&self) -> bool {
+        self.source.is_empty()
+    }
+
     pub fn has_next(&self) -> bool {
         self.pos < self.source.len()
     }
