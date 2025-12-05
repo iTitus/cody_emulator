@@ -111,17 +111,25 @@ impl<M: Memory> Cpu<M> {
             let opcode = get_instruction(self.read_u8_inc_pc());
             let cycles = if let Some(opcode) = opcode {
                 trace!("Executing opcode 0x{pc:04X} {opcode:?}");
+                let mut extra_cycles = 0;
                 match opcode.opcode {
                     Opcode::ADC => {
-                        let m = self.read_operand(opcode.parameter_1);
+                        let (m, page_cross) = self.read_value_operand(opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
                         if self.p.decimal_mode() {
+                            extra_cycles += 1;
                             self.do_addition_decimal(m);
                         } else {
                             self.do_addition(m);
                         }
                     }
                     Opcode::AND => {
-                        let m = self.read_operand(opcode.parameter_1);
+                        let (m, page_cross) = self.read_value_operand(opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
                         self.set_a(self.a & m);
                     }
                     Opcode::ASL => {
@@ -130,7 +138,10 @@ impl<M: Memory> Cpu<M> {
                             self.set_a(m << 1);
                             self.p.set_carry((m & 0x80) != 0);
                         } else {
-                            let addr = self.read_address(opcode.parameter_1);
+                            let (addr, page_cross) = self.read_address_operand(opcode.parameter_1);
+                            if page_cross {
+                                extra_cycles += 1;
+                            }
                             let m = self.memory.read_u8(addr);
                             let value = m << 1;
                             self.memory.write_u8(addr, value);
@@ -138,27 +149,30 @@ impl<M: Memory> Cpu<M> {
                             self.p.set_carry((m & 0x80) != 0);
                         }
                     }
-                    Opcode::BBR0 => self.bbr(0),
-                    Opcode::BBR1 => self.bbr(1),
-                    Opcode::BBR2 => self.bbr(2),
-                    Opcode::BBR3 => self.bbr(3),
-                    Opcode::BBR4 => self.bbr(4),
-                    Opcode::BBR5 => self.bbr(5),
-                    Opcode::BBR6 => self.bbr(6),
-                    Opcode::BBR7 => self.bbr(7),
-                    Opcode::BBS0 => self.bbs(0),
-                    Opcode::BBS1 => self.bbs(1),
-                    Opcode::BBS2 => self.bbs(2),
-                    Opcode::BBS3 => self.bbs(3),
-                    Opcode::BBS4 => self.bbs(4),
-                    Opcode::BBS5 => self.bbs(5),
-                    Opcode::BBS6 => self.bbs(6),
-                    Opcode::BBS7 => self.bbs(7),
-                    Opcode::BCC => self.branch(!self.p.carry()),
-                    Opcode::BCS => self.branch(self.p.carry()),
-                    Opcode::BEQ => self.branch(self.p.zero()),
+                    Opcode::BBR0 => extra_cycles += self.bbr(0),
+                    Opcode::BBR1 => extra_cycles += self.bbr(1),
+                    Opcode::BBR2 => extra_cycles += self.bbr(2),
+                    Opcode::BBR3 => extra_cycles += self.bbr(3),
+                    Opcode::BBR4 => extra_cycles += self.bbr(4),
+                    Opcode::BBR5 => extra_cycles += self.bbr(5),
+                    Opcode::BBR6 => extra_cycles += self.bbr(6),
+                    Opcode::BBR7 => extra_cycles += self.bbr(7),
+                    Opcode::BBS0 => extra_cycles += self.bbs(0),
+                    Opcode::BBS1 => extra_cycles += self.bbs(1),
+                    Opcode::BBS2 => extra_cycles += self.bbs(2),
+                    Opcode::BBS3 => extra_cycles += self.bbs(3),
+                    Opcode::BBS4 => extra_cycles += self.bbs(4),
+                    Opcode::BBS5 => extra_cycles += self.bbs(5),
+                    Opcode::BBS6 => extra_cycles += self.bbs(6),
+                    Opcode::BBS7 => extra_cycles += self.bbs(7),
+                    Opcode::BCC => extra_cycles += self.branch(!self.p.carry()),
+                    Opcode::BCS => extra_cycles += self.branch(self.p.carry()),
+                    Opcode::BEQ => extra_cycles += self.branch(self.p.zero()),
                     Opcode::BIT => {
-                        let m = self.read_operand(opcode.parameter_1);
+                        let (m, page_cross) = self.read_value_operand(opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
                         self.p.set_zero((self.a & m) == 0);
                         if opcode.parameter_1 != AddressingMode::Immediate {
                             // N and V are only touched when not in immediate mode
@@ -166,10 +180,10 @@ impl<M: Memory> Cpu<M> {
                             self.p.set_overflow((m & 0x40) != 0);
                         }
                     }
-                    Opcode::BMI => self.branch(self.p.negative()),
-                    Opcode::BNE => self.branch(!self.p.zero()),
-                    Opcode::BPL => self.branch(!self.p.negative()),
-                    Opcode::BRA => self.branch(true),
+                    Opcode::BMI => extra_cycles += self.branch(self.p.negative()),
+                    Opcode::BNE => extra_cycles += self.branch(!self.p.zero()),
+                    Opcode::BPL => extra_cycles += self.branch(!self.p.negative()),
+                    Opcode::BRA => extra_cycles += self.branch(true),
                     Opcode::BRK => {
                         self.pc = self.pc.wrapping_add(1); // skip unused 2nd instruction byte
                         // BRK logic
@@ -179,20 +193,39 @@ impl<M: Memory> Cpu<M> {
                         self.p.set_decimal_mode(false);
                         self.pc = self.memory.read_u16(IRQ_VECTOR);
                     }
-                    Opcode::BVC => self.branch(!self.p.overflow()),
-                    Opcode::BVS => self.branch(self.p.overflow()),
+                    Opcode::BVC => extra_cycles += self.branch(!self.p.overflow()),
+                    Opcode::BVS => extra_cycles += self.branch(self.p.overflow()),
                     Opcode::CLC => self.p.set_carry(false),
                     Opcode::CLD => self.p.set_decimal_mode(false),
                     Opcode::CLI => self.p.set_irqb_disable(false),
                     Opcode::CLV => self.p.set_overflow(false),
-                    Opcode::CMP => self.cmp(self.a, opcode.parameter_1),
-                    Opcode::CPX => self.cmp(self.x, opcode.parameter_1),
-                    Opcode::CPY => self.cmp(self.y, opcode.parameter_1),
+                    Opcode::CMP => {
+                        let page_cross = self.cmp(self.a, opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
+                    }
+                    Opcode::CPX => {
+                        let page_cross = self.cmp(self.x, opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
+                    }
+                    Opcode::CPY => {
+                        let page_cross = self.cmp(self.y, opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
+                    }
                     Opcode::DEC => {
                         if opcode.parameter_1 == AddressingMode::Accumulator {
                             self.set_a(self.a.wrapping_sub(1));
                         } else {
-                            let addr = self.read_address(opcode.parameter_1);
+                            let (addr, page_cross) = self.read_address_operand(opcode.parameter_1);
+                            if page_cross && opcode.parameter_1 != AddressingMode::AbsoluteIndexedX
+                            {
+                                extra_cycles += 1;
+                            }
                             let value = self.memory.read_u8(addr);
                             let new_value = value.wrapping_sub(1);
                             self.memory.write_u8(addr, new_value);
@@ -202,14 +235,21 @@ impl<M: Memory> Cpu<M> {
                     Opcode::DEX => self.set_x(self.x.wrapping_sub(1)),
                     Opcode::DEY => self.set_y(self.y.wrapping_sub(1)),
                     Opcode::EOR => {
-                        let m = self.read_operand(opcode.parameter_1);
+                        let (m, page_cross) = self.read_value_operand(opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
                         self.set_a(self.a ^ m);
                     }
                     Opcode::INC => {
                         if opcode.parameter_1 == AddressingMode::Accumulator {
                             self.set_a(self.a.wrapping_add(1));
                         } else {
-                            let addr = self.read_address(opcode.parameter_1);
+                            let (addr, page_cross) = self.read_address_operand(opcode.parameter_1);
+                            if page_cross && opcode.parameter_1 != AddressingMode::AbsoluteIndexedX
+                            {
+                                extra_cycles += 1;
+                            }
                             let value = self.memory.read_u8(addr);
                             let new_value = value.wrapping_add(1);
                             self.memory.write_u8(addr, new_value);
@@ -219,25 +259,40 @@ impl<M: Memory> Cpu<M> {
                     Opcode::INX => self.set_x(self.x.wrapping_add(1)),
                     Opcode::INY => self.set_y(self.y.wrapping_add(1)),
                     Opcode::JMP => {
-                        let target = self.read_address(opcode.parameter_1);
+                        let (target, page_cross) = self.read_address_operand(opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
                         self.pc = target;
                     }
                     Opcode::JSR => {
-                        let target = self.read_address(opcode.parameter_1);
+                        let (target, page_cross) = self.read_address_operand(opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
                         self.pc = self.pc.wrapping_sub(1);
                         self.push_pc();
                         self.pc = target;
                     }
                     Opcode::LDA => {
-                        let op = self.read_operand(opcode.parameter_1);
+                        let (op, page_cross) = self.read_value_operand(opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
                         self.set_a(op);
                     }
                     Opcode::LDX => {
-                        let op = self.read_operand(opcode.parameter_1);
+                        let (op, page_cross) = self.read_value_operand(opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
                         self.set_x(op);
                     }
                     Opcode::LDY => {
-                        let op = self.read_operand(opcode.parameter_1);
+                        let (op, page_cross) = self.read_value_operand(opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
                         self.set_y(op);
                     }
                     Opcode::LSR => {
@@ -246,7 +301,10 @@ impl<M: Memory> Cpu<M> {
                             self.set_a(m >> 1);
                             self.p.set_carry((m & 0b1) != 0);
                         } else {
-                            let addr = self.read_address(opcode.parameter_1);
+                            let (addr, page_cross) = self.read_address_operand(opcode.parameter_1);
+                            if page_cross {
+                                extra_cycles += 1;
+                            }
                             let m = self.memory.read_u8(addr);
                             let value = m >> 1;
                             self.memory.write_u8(addr, value);
@@ -256,7 +314,10 @@ impl<M: Memory> Cpu<M> {
                     }
                     Opcode::NOP => {}
                     Opcode::ORA => {
-                        let m = self.read_operand(opcode.parameter_1);
+                        let (m, page_cross) = self.read_value_operand(opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
                         self.set_a(self.a | m);
                     }
                     Opcode::PHA => self.push(self.a),
@@ -292,7 +353,10 @@ impl<M: Memory> Cpu<M> {
                             self.set_a((m << 1) | self.p.carry() as u8);
                             self.p.set_carry((m & 0x80) != 0);
                         } else {
-                            let addr = self.read_address(opcode.parameter_1);
+                            let (addr, page_cross) = self.read_address_operand(opcode.parameter_1);
+                            if page_cross {
+                                extra_cycles += 1;
+                            }
                             let m = self.memory.read_u8(addr);
                             let value = (m << 1) | self.p.carry() as u8;
                             self.memory.write_u8(addr, value);
@@ -306,7 +370,10 @@ impl<M: Memory> Cpu<M> {
                             self.set_a((m >> 1) | ((self.p.carry() as u8) << 7));
                             self.p.set_carry((m & 0b1) != 0);
                         } else {
-                            let addr = self.read_address(opcode.parameter_1);
+                            let (addr, page_cross) = self.read_address_operand(opcode.parameter_1);
+                            if page_cross {
+                                extra_cycles += 1;
+                            }
                             let m = self.memory.read_u8(addr);
                             let value = (m >> 1) | ((self.p.carry() as u8) << 7);
                             self.memory.write_u8(addr, value);
@@ -323,8 +390,12 @@ impl<M: Memory> Cpu<M> {
                         self.pc = self.pc.wrapping_add(1);
                     }
                     Opcode::SBC => {
-                        let m = self.read_operand(opcode.parameter_1);
+                        let (m, page_cross) = self.read_value_operand(opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
                         if self.p.decimal_mode() {
+                            extra_cycles += 1;
                             self.do_subtraction_decimal(m);
                         } else {
                             self.do_subtraction(m);
@@ -342,33 +413,39 @@ impl<M: Memory> Cpu<M> {
                     Opcode::SMB6 => self.smb(6),
                     Opcode::SMB7 => self.smb(7),
                     Opcode::STA => {
-                        let addr = self.read_address(opcode.parameter_1);
+                        let (addr, _) = self.read_address_operand(opcode.parameter_1);
                         self.memory.write_u8(addr, self.a);
                     }
                     Opcode::STP => self.run = false,
                     Opcode::STX => {
-                        let addr = self.read_address(opcode.parameter_1);
+                        let (addr, _) = self.read_address_operand(opcode.parameter_1);
                         self.memory.write_u8(addr, self.x);
                     }
                     Opcode::STY => {
-                        let addr = self.read_address(opcode.parameter_1);
+                        let (addr, _) = self.read_address_operand(opcode.parameter_1);
                         self.memory.write_u8(addr, self.y);
                     }
                     Opcode::STZ => {
-                        let addr = self.read_address(opcode.parameter_1);
+                        let (addr, _) = self.read_address_operand(opcode.parameter_1);
                         self.memory.write_u8(addr, 0);
                     }
                     Opcode::TAX => self.set_x(self.a),
                     Opcode::TAY => self.set_y(self.a),
                     Opcode::TRB => {
-                        let addr = self.read_address(opcode.parameter_1);
+                        let (addr, page_cross) = self.read_address_operand(opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
                         let a = self.a;
                         let m = self.memory.read_u8(addr);
                         self.memory.write_u8(addr, m & !a);
                         self.p.set_zero((m & a) == 0);
                     }
                     Opcode::TSB => {
-                        let addr = self.read_address(opcode.parameter_1);
+                        let (addr, page_cross) = self.read_address_operand(opcode.parameter_1);
+                        if page_cross {
+                            extra_cycles += 1;
+                        }
                         let a = self.a;
                         let m = self.memory.read_u8(addr);
                         self.memory.write_u8(addr, m | a);
@@ -381,7 +458,7 @@ impl<M: Memory> Cpu<M> {
                     Opcode::WAI => self.wai = true,
                 }
 
-                opcode.cycles
+                opcode.cycles + extra_cycles
             } else {
                 // TODO: implement undocumented opcodes with correct cycle count
                 1
@@ -408,48 +485,76 @@ impl<M: Memory> Cpu<M> {
         result
     }
 
-    fn read_operand(&mut self, addressing_mode: AddressingMode) -> u8 {
+    /// return value and if a page boundary was crossed
+    fn read_value_operand(&mut self, addressing_mode: AddressingMode) -> (u8, bool) {
         match addressing_mode {
-            AddressingMode::Accumulator => self.a,
-            AddressingMode::Immediate => self.read_u8_inc_pc(),
+            AddressingMode::Accumulator => (self.a, false),
+            AddressingMode::Immediate => (self.read_u8_inc_pc(), false),
             _ => {
-                let address = self.read_address(addressing_mode);
-                self.memory.read_u8(address)
+                let (address, page_cross) = self.read_address_operand(addressing_mode);
+                (self.memory.read_u8(address), page_cross)
             }
         }
     }
 
-    fn read_address(&mut self, addressing_mode: AddressingMode) -> u16 {
+    /// return address and if a page boundary was crossed
+    fn read_address_operand(&mut self, addressing_mode: AddressingMode) -> (u16, bool) {
         match addressing_mode {
-            AddressingMode::Absolute => self.read_u16_inc_pc(),
-            AddressingMode::AbsoluteIndexedX => self.read_u16_inc_pc().wrapping_add(self.x as u16),
-            AddressingMode::AbsoluteIndexedY => self.read_u16_inc_pc().wrapping_add(self.y as u16),
+            AddressingMode::Absolute => (self.read_u16_inc_pc(), false),
+            AddressingMode::AbsoluteIndexedX => {
+                let base = self.read_u16_inc_pc();
+                let address = base.wrapping_add(self.x as u16);
+                if base >> 8 != address >> 8 {
+                    (address, true)
+                } else {
+                    (address, false)
+                }
+            }
+            AddressingMode::AbsoluteIndexedY => {
+                let base = self.read_u16_inc_pc();
+                let address = base.wrapping_add(self.y as u16);
+                if base >> 8 != address >> 8 {
+                    (address, true)
+                } else {
+                    (address, false)
+                }
+            }
             AddressingMode::AbsoluteIndirect => {
                 let address = self.read_u16_inc_pc();
-                self.memory.read_u16(address)
+                (self.memory.read_u16(address), false)
             }
             AddressingMode::AbsoluteIndexedIndirectX => {
                 let address = self.read_u16_inc_pc().wrapping_add(self.x as u16);
-                self.memory.read_u16(address)
+                (self.memory.read_u16(address), false)
             }
             AddressingMode::ProgramCounterRelative => {
                 let offset = self.read_u8_inc_pc() as i8;
-                self.pc.wrapping_add_signed(offset as i16)
+                (self.pc.wrapping_add_signed(offset as i16), false)
             }
-            AddressingMode::ZeroPage => self.read_u8_inc_pc() as u16,
-            AddressingMode::ZeroPageIndexedX => self.read_u8_inc_pc().wrapping_add(self.x) as u16,
-            AddressingMode::ZeroPageIndexedY => self.read_u8_inc_pc().wrapping_add(self.y) as u16,
+            AddressingMode::ZeroPage => (self.read_u8_inc_pc() as u16, false),
+            AddressingMode::ZeroPageIndexedX => {
+                (self.read_u8_inc_pc().wrapping_add(self.x) as u16, false)
+            }
+            AddressingMode::ZeroPageIndexedY => {
+                (self.read_u8_inc_pc().wrapping_add(self.y) as u16, false)
+            }
             AddressingMode::ZeroPageIndirect => {
                 let address = self.read_u8_inc_pc();
-                self.memory.read_u16_zp(address)
+                (self.memory.read_u16_zp(address), false)
             }
             AddressingMode::ZeroPageIndexedIndirectX => {
                 let address = self.read_u8_inc_pc().wrapping_add(self.x);
-                self.memory.read_u16_zp(address)
+                (self.memory.read_u16_zp(address), false)
             }
             AddressingMode::ZeroPageIndirectIndexedY => {
                 let address = self.read_u8_inc_pc();
-                self.memory.read_u16_zp(address).wrapping_add(self.y as u16)
+                let base = self.memory.read_u16_zp(address);
+                let address = base.wrapping_add(self.y as u16);
+                if base >> 8 != address >> 8 {
+                    (address, true)
+                } else {
+                    (address, false)
+                }
             }
             _ => unimplemented!(),
         }
@@ -580,43 +685,56 @@ impl<M: Memory> Cpu<M> {
             .set_overflow(((a ^ overflow_flag_pre) & (!m ^ overflow_flag_pre) & 0x80) != 0);
     }
 
-    fn bbr(&mut self, bit: u8) {
-        let m = self.read_operand(AddressingMode::ZeroPage);
-        let target = self.read_address(AddressingMode::ProgramCounterRelative);
+    fn bbr(&mut self, bit: u8) -> usize {
+        let (m, _) = self.read_value_operand(AddressingMode::ZeroPage);
+        let (target, _) = self.read_address_operand(AddressingMode::ProgramCounterRelative);
         if ((m >> bit) & 0b1) == 0 {
+            let pc = self.pc;
             self.pc = target;
+            if pc >> 8 != target >> 8 { 2 } else { 1 }
+        } else {
+            0
         }
     }
 
-    fn bbs(&mut self, bit: u8) {
-        let m = self.read_operand(AddressingMode::ZeroPage);
-        let target = self.read_address(AddressingMode::ProgramCounterRelative);
+    fn bbs(&mut self, bit: u8) -> usize {
+        let (m, _) = self.read_value_operand(AddressingMode::ZeroPage);
+        let (target, _) = self.read_address_operand(AddressingMode::ProgramCounterRelative);
         if ((m >> bit) & 0b1) != 0 {
+            let pc = self.pc;
             self.pc = target;
+            if pc >> 8 != target >> 8 { 2 } else { 1 }
+        } else {
+            0
         }
     }
 
-    fn branch(&mut self, condition: bool) {
-        let target = self.read_address(AddressingMode::ProgramCounterRelative);
+    fn branch(&mut self, condition: bool) -> usize {
+        let (target, _) = self.read_address_operand(AddressingMode::ProgramCounterRelative);
         if condition {
+            let pc = self.pc;
             self.pc = target;
+            if pc >> 8 != target >> 8 { 2 } else { 1 }
+        } else {
+            0
         }
     }
 
-    fn cmp(&mut self, a: u8, addressing_mode: AddressingMode) {
-        let m = self.read_operand(addressing_mode);
+    fn cmp(&mut self, a: u8, addressing_mode: AddressingMode) -> bool {
+        let (m, page_cross) = self.read_value_operand(addressing_mode);
         self.update_nz_flags(a.wrapping_sub(m));
         self.p.set_carry(a >= m);
+        page_cross
     }
 
     fn rmb(&mut self, bit: u8) {
-        let addr = self.read_address(AddressingMode::ZeroPage);
+        let (addr, _) = self.read_address_operand(AddressingMode::ZeroPage);
         let m = self.memory.read_u8(addr);
         self.memory.write_u8(addr, m & !(1 << bit));
     }
 
     fn smb(&mut self, bit: u8) {
-        let addr = self.read_address(AddressingMode::ZeroPage);
+        let (addr, _) = self.read_address_operand(AddressingMode::ZeroPage);
         let m = self.memory.read_u8(addr);
         self.memory.write_u8(addr, m | (1 << bit));
     }

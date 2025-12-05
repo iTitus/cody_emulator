@@ -88,8 +88,15 @@ fn execute_test_case(test_case: &TestCase) {
         cpu.memory.write_u8(ram_value.address(), ram_value.value());
     }
 
-    cpu.step_instruction();
+    let cycles = cpu.step_instruction();
 
+    assert_eq!(
+        cycles,
+        test_case.cycles.len(),
+        "cycles: expected={}, actual={}",
+        test_case.cycles.len(),
+        cycles
+    );
     assert_eq!(
         cpu.pc, test_case.r#final.pc,
         "pc: expected={}, actual={}",
