@@ -43,7 +43,7 @@ impl<M: MemoryMode> Contiguous<M> {
     pub fn new(size: usize) -> Self {
         Self {
             memory: vec![0; size].into_boxed_slice(),
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
         }
     }
 

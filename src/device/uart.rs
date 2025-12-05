@@ -74,6 +74,12 @@ impl Uart {
     }
 }
 
+impl Default for Uart {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Memory for Uart {
     fn read_u8(&mut self, address: u16) -> u8 {
         match address {

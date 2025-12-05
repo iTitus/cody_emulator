@@ -144,13 +144,13 @@ pub fn start(
     let key_state = Rc::clone(via.get_key_state());
     memory.add_memory(0x9F00, 0x0100, via);
 
-    let uart1 = Uart::new();
+    let uart1 = Uart::default();
     let (uart1_rx, uart1_tx) = (
         Rc::clone(uart1.get_receive_buffer()),
         Rc::clone(uart1.get_transmit_buffer()),
     );
     memory.add_memory(UART1_BASE, UART_END, uart1);
-    let uart2 = Uart::new();
+    let uart2 = Uart::default();
     let (uart2_rx, uart2_tx) = (
         Rc::clone(uart2.get_receive_buffer()),
         Rc::clone(uart2.get_transmit_buffer()),

@@ -56,11 +56,8 @@ impl Memory for Via {
     }
 
     fn write_u8(&mut self, address: u16, value: u8) {
-        match address {
-            0x0..=0xF => {
-                self.registers[address as usize] = value;
-            }
-            _ => {}
+        if let 0x0..=0xF = address {
+            self.registers[address as usize] = value;
         }
     }
 

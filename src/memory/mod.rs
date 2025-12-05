@@ -49,39 +49,39 @@ pub trait Memory {
 
 impl<M: Memory> Memory for Box<M> {
     fn read_u8(&mut self, address: u16) -> u8 {
-        (&mut **self).read_u8(address)
+        (**self).read_u8(address)
     }
 
     fn read_u8_zp(&mut self, address: u8) -> u8 {
-        (&mut **self).read_u8_zp(address)
+        (**self).read_u8_zp(address)
     }
 
     fn read_u16(&mut self, address: u16) -> u16 {
-        (&mut **self).read_u16(address)
+        (**self).read_u16(address)
     }
 
     fn read_u16_zp(&mut self, address: u8) -> u16 {
-        (&mut **self).read_u16_zp(address)
+        (**self).read_u16_zp(address)
     }
 
     fn write_u8(&mut self, address: u16, value: u8) {
-        (&mut **self).write_u8(address, value);
+        (**self).write_u8(address, value);
     }
 
     fn write_u8_zp(&mut self, address: u8, value: u8) {
-        (&mut **self).write_u8_zp(address, value);
+        (**self).write_u8_zp(address, value);
     }
 
     fn write_u16(&mut self, address: u16, value: u16) {
-        (&mut **self).write_u16(address, value);
+        (**self).write_u16(address, value);
     }
 
     fn write_u16_zp(&mut self, address: u8, value: u16) {
-        (&mut **self).write_u16_zp(address, value);
+        (**self).write_u16_zp(address, value);
     }
 
     fn update(&mut self, cycle: usize) -> Interrupt {
-        (&mut **self).update(cycle)
+        (**self).update(cycle)
     }
 }
 
