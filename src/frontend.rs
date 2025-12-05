@@ -1,22 +1,22 @@
 use crate::cpu;
 use crate::cpu::Cpu;
+use crate::device::blanking::BlankingRegister;
 use crate::device::keyboard::{Keyboard, KeyboardEmulation};
-use crate::device::uart::{UART1_BASE, UART2_BASE, Uart};
+use crate::device::uart::{UART_END, UART1_BASE, UART2_BASE, Uart};
 use crate::device::via::Via;
-use crate::device::vid::{HEIGHT, Vid, WIDTH};
+use crate::device::vid;
+use crate::device::vid::{HEIGHT, WIDTH};
 use crate::memory::Memory;
 use crate::memory::contiguous::Contiguous;
 use crate::memory::mapped::MappedMemory;
-use log::{debug, info};
+use log::info;
 use pixels::{Pixels, SurfaceTexture};
-use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::io::Read;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{DeviceEvent, DeviceId, StartCause, WindowEvent};
@@ -144,34 +144,23 @@ pub fn start(
     let key_state = Rc::clone(via.get_key_state());
     memory.add_memory(0x9F00, 0x0100, via);
 
-    let uart1_device = Arc::new(Mutex::new(Uart::new(UART1_BASE)));
-    memory.lock().unwrap().add_device(Arc::clone(&uart1_device));
-    let uart2_device = Arc::new(Mutex::new(Uart::new(UART2_BASE)));
-    memory.lock().unwrap().add_device(Arc::clone(&uart2_device));
+    let uart1 = Uart::new();
+    let (uart1_rx, uart1_tx) = (
+        Rc::clone(uart1.get_receive_buffer()),
+        Rc::clone(uart1.get_transmit_buffer()),
+    );
+    memory.add_memory(UART1_BASE, UART_END, uart1);
+    let uart2 = Uart::new();
+    let (uart2_rx, uart2_tx) = (
+        Rc::clone(uart2.get_receive_buffer()),
+        Rc::clone(uart2.get_transmit_buffer()),
+    );
+    memory.add_memory(UART2_BASE, UART_END, uart2);
 
-    {
-        let mut cpu = Cpu::new(memory);
-        info!("Starting cpu");
-        thread::spawn(move || {
-            cpu.run();
-        });
-    }
+    memory.add_memory(0xD000, 0x1, BlankingRegister::default());
 
-    {
-        // TODO: make this use the VIA registers for configuration
-        info!("Starting interrupt timer");
-        let mut interrupt_trigger = Arc::clone(&interrupt_provider);
-        thread::spawn(move || {
-            loop {
-                thread::sleep(Duration::from_secs_f64(1.0 / 60.0));
-                interrupt_trigger.trigger_irq();
-            }
-        });
-    }
-
-    {
+    /*{
         // TODO: better UART support
-        let uart1 = Arc::clone(&uart1_device);
         let mut uart1_source: VecDeque<u8> = if let Some(path) = uart1_source {
             let f = File::open(path.as_ref()).unwrap();
             let mut r = BufReader::new(f);
@@ -223,48 +212,24 @@ pub fn start(
                 drop(uart1);
             }
         });
-    }
-
-    let vid_device = Arc::new(Mutex::new(Vid::new(Arc::clone(&memory))));
-    {
-        const FPS: u64 = 60;
-        const NANOS_PER_SEC: u64 = Duration::from_secs(1).as_nanos() as u64;
-        const DELTA_TIME: Duration = Duration::from_nanos(NANOS_PER_SEC / FPS);
-        const DRAWING_INTERVAL: Duration = Duration::from_nanos(NANOS_PER_SEC / FPS * 480 / 525);
-        const BLANKING_INTERVAL: Duration = DELTA_TIME.checked_sub(DRAWING_INTERVAL).unwrap();
-
-        // fake blanking register
-        let mut memory = Arc::clone(&memory);
-        thread::spawn(move || {
-            loop {
-                // set blanking register to 0 because we are "drawing" now
-                memory.write_u8(0xD000, 0);
-                thread::sleep(DRAWING_INTERVAL);
-
-                // reset blanking register to 1 for blanking interval
-                memory.write_u8(0xD000, 1);
-                thread::sleep(BLANKING_INTERVAL);
-            }
-        });
-    }
+    }*/
 
     let mut app = App {
         state: None,
-        memory,
-        vid_device,
-        keyboard_device: Arc::new(Mutex::new(Keyboard::new(
+        cpu: Cpu::new(memory),
+        keyboard: Keyboard::new(
             if physical_keyboard {
                 KeyboardEmulation::Physical
             } else {
                 KeyboardEmulation::Logical
             },
             key_state,
-        ))),
-        last_frame: None,
+        ),
+        last_frame_start: Instant::now(),
         input: WinitInputHelper::new(),
     };
 
-    info!("Starting window event loop");
+    info!("Starting event loop");
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
     event_loop.run_app(&mut app).unwrap();
@@ -272,10 +237,9 @@ pub fn start(
 
 struct App<M> {
     state: Option<State>,
-    memory: Arc<Mutex<M>>,
-    vid_device: Arc<Mutex<Vid<M>>>,
-    keyboard_device: Arc<Mutex<Keyboard>>,
-    last_frame: Option<Instant>,
+    cpu: Cpu<M>,
+    keyboard: Keyboard,
+    last_frame_start: Instant,
     input: WinitInputHelper,
 }
 
@@ -286,6 +250,7 @@ struct State {
 
 impl<M: Memory> ApplicationHandler for App<M> {
     fn new_events(&mut self, _: &ActiveEventLoop, _: StartCause) {
+        self.last_frame_start = Instant::now();
         self.input.step();
     }
 
@@ -315,11 +280,8 @@ impl<M: Memory> ApplicationHandler for App<M> {
             };
 
             let raw_pixels = state.pixels.frame_mut();
-            self.vid_device
-                .lock()
-                .unwrap()
-                .render_pixels(bytemuck::cast_slice_mut(raw_pixels));
-            state.pixels.render().unwrap();
+            vid::render_pixels(&mut self.cpu.memory, bytemuck::cast_slice_mut(raw_pixels));
+            state.pixels.render().expect("render error");
         }
     }
 
@@ -335,7 +297,7 @@ impl<M: Memory> ApplicationHandler for App<M> {
             return;
         }
 
-        self.keyboard_device.lock().unwrap().update(&self.input);
+        self.keyboard.update(&self.input);
 
         let Some(state) = &mut self.state else {
             return;
@@ -349,6 +311,17 @@ impl<M: Memory> ApplicationHandler for App<M> {
                 .pixels
                 .resize_surface(size.width, size.height)
                 .unwrap();
+        }
+
+        const FPS: f64 = 60.0;
+        const FRAME_TIME: f64 = 1.0 / FPS;
+        loop {
+            // TODO: use cycle count instead of real time?
+            let _ = self.cpu.step_instruction();
+            let elapsed = self.last_frame_start.elapsed().as_secs_f64();
+            if elapsed >= FRAME_TIME {
+                break;
+            }
         }
 
         state.window.request_redraw();

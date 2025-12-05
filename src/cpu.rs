@@ -1,4 +1,3 @@
-use crate::interrupt::Interrupt;
 use crate::memory::Memory;
 use crate::opcode::{AddressingMode, Opcode, get_instruction};
 use bitfields::bitfield;
