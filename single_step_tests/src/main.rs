@@ -1,7 +1,7 @@
 use anyhow::{Context, anyhow};
 use cody_emulator::cpu::{Cpu, Status};
-use cody_emulator::interrupt::NoopInterruptProvider;
-use cody_emulator::memory::{Contiguous, Memory};
+use cody_emulator::memory::Memory;
+use cody_emulator::memory::contiguous::Contiguous;
 use cody_emulator::opcode::OPCODES;
 use single_step_tests::TestCase;
 use std::fs;
@@ -75,7 +75,8 @@ fn collect_test_cases_from_file(path: impl AsRef<Path>) -> anyhow::Result<Vec<Te
 }
 
 fn execute_test_case(test_case: &TestCase) {
-    let mut cpu = Cpu::new(Contiguous::default(), NoopInterruptProvider);
+    let memory = Contiguous::new_ram(0x10000);
+    let mut cpu = Cpu::new(memory);
     cpu.pc = test_case.initial.pc;
     cpu.s = test_case.initial.s;
     cpu.a = test_case.initial.a;

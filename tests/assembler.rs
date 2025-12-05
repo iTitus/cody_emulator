@@ -1,8 +1,8 @@
 use cody_emulator::assembler::{MnemonicDSL, Parameter, assemble};
 use cody_emulator::cpu;
 use cody_emulator::cpu::Cpu;
-use cody_emulator::interrupt::NoopInterruptProvider;
-use cody_emulator::memory::{Memory, Sparse};
+use cody_emulator::memory::Memory;
+use cody_emulator::memory::contiguous::Contiguous;
 use cody_emulator::opcode::Opcode;
 
 #[test]
@@ -15,10 +15,10 @@ pub fn test_assemble_labels_1() {
         Opcode::BRA.with(Parameter::label("exit")),
         Opcode::STP.labelled("exit"),
     ];
-    let mut memory = Sparse::default();
-    assemble(&program, &mut memory.memory).unwrap();
+    let mut memory = Contiguous::new_ram(0x10000);
+    assemble(&program, &mut *memory.memory).unwrap();
     memory.write_u16(cpu::RESET_VECTOR, 0x0200);
-    let mut cpu = Cpu::new(memory, NoopInterruptProvider);
+    let mut cpu = Cpu::new(memory);
     cpu.run();
 
     assert_eq!(cpu.a, 1);
@@ -34,10 +34,10 @@ pub fn test_assemble_labels_2() {
         Opcode::BRA.with(Parameter::label("exit")),
         Opcode::STP.labelled("exit"),
     ];
-    let mut memory = Sparse::default();
-    assemble(&program, &mut memory.memory).unwrap();
+    let mut memory = Contiguous::new_ram(0x10000);
+    assemble(&program, &mut *memory.memory).unwrap();
     memory.write_u16(cpu::RESET_VECTOR, 0x0200);
-    let mut cpu = Cpu::new(memory, NoopInterruptProvider);
+    let mut cpu = Cpu::new(memory);
     cpu.run();
 
     assert_eq!(cpu.a, 2);
@@ -58,10 +58,10 @@ pub fn test_assemble_bbs_labels() {
         Opcode::BRA.with(Parameter::label("exit")),
         Opcode::STP.labelled("exit"),
     ];
-    let mut memory = Sparse::default();
-    assemble(&program, &mut memory.memory).unwrap();
+    let mut memory = Contiguous::new_ram(0x10000);
+    assemble(&program, &mut *memory.memory).unwrap();
     memory.write_u16(cpu::RESET_VECTOR, 0x0200);
-    let mut cpu = Cpu::new(memory, NoopInterruptProvider);
+    let mut cpu = Cpu::new(memory);
     cpu.run();
 
     assert_eq!(cpu.a, 2);

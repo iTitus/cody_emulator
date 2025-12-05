@@ -4,7 +4,7 @@ use std::io::Write;
 use std::marker::PhantomData;
 
 pub struct Contiguous<M = Ram> {
-    memory: Box<[u8]>,
+    pub memory: Box<[u8]>,
     _phantom: PhantomData<M>,
 }
 
