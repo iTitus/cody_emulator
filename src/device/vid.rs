@@ -1,6 +1,4 @@
 use crate::memory::Memory;
-use std::ops::DerefMut;
-use std::sync::{Arc, Mutex};
 
 pub const CONTENT_WIDTH: u8 = 160;
 pub const HIRES_WIDTH: u16 = 2 * CONTENT_WIDTH as u16;
@@ -72,67 +70,51 @@ impl Color {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Vid<M> {
-    memory: Arc<Mutex<M>>,
-}
+pub fn render_pixels<M: Memory>(memory: &mut M, raw_pixels: &mut [Color]) {
+    let (
+        disable_video,
+        enable_v_scroll,
+        enable_h_scroll,
+        enable_row_effects,
+        bitmap_mode,
+        hires_mode,
+    ) = {
+        let control = memory.read_u8(0xD001);
+        let hires_mode = (control & 0x20) != 0;
+        (
+            (control & 0x1) != 0,
+            (control & 0x2) != 0 && !hires_mode,
+            (control & 0x4) != 0 && !hires_mode,
+            (control & 0x8) != 0,
+            (control & 0x10) != 0,
+            hires_mode,
+        )
+    };
 
-impl<M: Memory> Vid<M> {
-    pub fn new(memory: Arc<Mutex<M>>) -> Self {
-        Self { memory }
+    let color = memory.read_u8(0xD002);
+    raw_pixels.fill(Color::PALETTE[(color & 0xF) as usize]); // fill with border color
+    let color_memory_start = 0xA000u16.wrapping_add(0x400 * (color >> 4) as u16);
+
+    if disable_video {
+        return;
     }
 
-    pub fn render_pixels(&mut self, raw_pixels: &mut [Color]) {
-        let mut memory = self.memory.lock().unwrap();
+    // these depend on the fine scrolling state
+    let width = {
+        let w = CONTENT_WIDTH as u16 - if enable_h_scroll { 2 * 4 } else { 0 };
+        if hires_mode { w * 2 } else { w }
+    };
+    let height = CONTENT_HEIGHT - if enable_v_scroll { 8 } else { 0 };
+    let border_x = BORDER_X as usize + if enable_h_scroll { 2 * 2 } else { 0 };
+    let border_y = BORDER_Y as usize + if enable_v_scroll { 4 } else { 0 };
 
-        let (
-            disable_video,
-            enable_v_scroll,
-            enable_h_scroll,
-            enable_row_effects,
-            bitmap_mode,
-            hires_mode,
-        ) = {
-            let control = memory.read_u8(0xD001);
-            let hires_mode = (control & 0x20) != 0;
-            (
-                (control & 0x1) != 0,
-                (control & 0x2) != 0 && !hires_mode,
-                (control & 0x4) != 0 && !hires_mode,
-                (control & 0x8) != 0,
-                (control & 0x10) != 0,
-                hires_mode,
-            )
-        };
+    let mut base = memory.read_u8(0xD003); // editable via 00 row effect
+    let mut scroll = memory.read_u8(0xD004); // editable via 01 row effect
+    let mut screen_colors = memory.read_u8(0xD005); // editable via 10 row effect
+    let mut sprite = memory.read_u8(0xD006); // editable via 11 row effect
 
-        let color = memory.read_u8(0xD002);
-        raw_pixels.fill(Color::PALETTE[(color & 0xF) as usize]); // fill with border color
-        let color_memory_start = 0xA000u16.wrapping_add(0x400 * (color >> 4) as u16);
-
-        if disable_video {
-            return;
-        }
-
-        // these depend on the fine scrolling state
-        let width = {
-            let w = CONTENT_WIDTH as u16 - if enable_h_scroll { 2 * 4 } else { 0 };
-            if hires_mode { w * 2 } else { w }
-        };
-        let height = CONTENT_HEIGHT - if enable_v_scroll { 8 } else { 0 };
-        let border_x = BORDER_X as usize + if enable_h_scroll { 2 * 2 } else { 0 };
-        let border_y = BORDER_Y as usize + if enable_v_scroll { 4 } else { 0 };
-
-        let mut base = memory.read_u8(0xD003); // editable via 00 row effect
-        let mut scroll = memory.read_u8(0xD004); // editable via 01 row effect
-        let mut screen_colors = memory.read_u8(0xD005); // editable via 10 row effect
-        let mut sprite = memory.read_u8(0xD006); // editable via 11 row effect
-
-        let mut render_line = |y: u16,
-                               memory: &mut M,
-                               base: u8,
-                               scroll: u8,
-                               screen_colors: u8,
-                               sprite: u8| {
+    let mut render_line =
+        |y: u16, memory: &mut M, base: u8, scroll: u8, screen_colors: u8, sprite: u8| {
             let screen_memory_start = 0xA000u16.wrapping_add(0x400 * (base >> 4) as u16);
             let character_memory_start = 0xA000u16.wrapping_add(0x800 * (base & 0xF) as u16);
             let v_scroll_amount = if enable_v_scroll { scroll & 0x7 } else { 0 };
@@ -255,37 +237,29 @@ impl<M: Memory> Vid<M> {
             }
         };
 
-        for y in 0..height {
-            render_line(
-                y as u16,
-                memory.deref_mut(),
-                base,
-                scroll,
-                screen_colors,
-                sprite,
-            );
+    for y in 0..height {
+        render_line(y as u16, memory, base, scroll, screen_colors, sprite);
 
-            let tile_y = y / 8;
-            let in_tile_y = y % 8;
-            if enable_row_effects && in_tile_y == 0 {
-                for effect_index in 0..32 {
-                    let effect_control = memory.read_u8(0xD040 + effect_index);
-                    if effect_control & 0x80 == 0 {
-                        continue;
-                    }
-                    let row = effect_control & 0x1F;
-                    if row != tile_y {
-                        continue;
-                    }
-                    let destination = (effect_control >> 5) & 0x3;
-                    let effect_data = memory.read_u8(0xD060 + effect_index);
-                    match destination {
-                        0 => base = effect_data,
-                        1 => scroll = effect_data,
-                        2 => screen_colors = effect_data,
-                        3 => sprite = effect_data,
-                        _ => unreachable!(),
-                    }
+        let tile_y = y / 8;
+        let in_tile_y = y % 8;
+        if enable_row_effects && in_tile_y == 0 {
+            for effect_index in 0..32 {
+                let effect_control = memory.read_u8(0xD040 + effect_index);
+                if effect_control & 0x80 == 0 {
+                    continue;
+                }
+                let row = effect_control & 0x1F;
+                if row != tile_y {
+                    continue;
+                }
+                let destination = (effect_control >> 5) & 0x3;
+                let effect_data = memory.read_u8(0xD060 + effect_index);
+                match destination {
+                    0 => base = effect_data,
+                    1 => scroll = effect_data,
+                    2 => screen_colors = effect_data,
+                    3 => sprite = effect_data,
+                    _ => unreachable!(),
                 }
             }
         }
