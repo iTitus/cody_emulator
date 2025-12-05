@@ -85,7 +85,7 @@ impl<M: Memory> Cpu<M> {
     }
 
     /// execute one instruction, returns the number of elapsed cycles
-    pub fn step_instruction(&mut self) -> usize {
+    pub fn step_instruction(&mut self) -> u8 {
         if !self.run {
             return 0;
         }
@@ -464,7 +464,7 @@ impl<M: Memory> Cpu<M> {
                 1
             };
 
-            self.cycle = self.cycle.wrapping_add(cycles);
+            self.cycle = self.cycle.wrapping_add(cycles as usize);
             return cycles;
         }
 
@@ -685,7 +685,7 @@ impl<M: Memory> Cpu<M> {
             .set_overflow(((a ^ overflow_flag_pre) & (!m ^ overflow_flag_pre) & 0x80) != 0);
     }
 
-    fn bbr(&mut self, bit: u8) -> usize {
+    fn bbr(&mut self, bit: u8) -> u8 {
         let (m, _) = self.read_value_operand(AddressingMode::ZeroPage);
         let (target, _) = self.read_address_operand(AddressingMode::ProgramCounterRelative);
         if ((m >> bit) & 0b1) == 0 {
@@ -697,7 +697,7 @@ impl<M: Memory> Cpu<M> {
         }
     }
 
-    fn bbs(&mut self, bit: u8) -> usize {
+    fn bbs(&mut self, bit: u8) -> u8 {
         let (m, _) = self.read_value_operand(AddressingMode::ZeroPage);
         let (target, _) = self.read_address_operand(AddressingMode::ProgramCounterRelative);
         if ((m >> bit) & 0b1) != 0 {
@@ -709,7 +709,7 @@ impl<M: Memory> Cpu<M> {
         }
     }
 
-    fn branch(&mut self, condition: bool) -> usize {
+    fn branch(&mut self, condition: bool) -> u8 {
         let (target, _) = self.read_address_operand(AddressingMode::ProgramCounterRelative);
         if condition {
             let pc = self.pc;

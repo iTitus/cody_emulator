@@ -104,7 +104,7 @@ pub enum Opcode {
 }
 
 impl Opcode {
-    const fn insn0(self, opcode: u8, cycles: usize) -> InstructionMeta {
+    const fn insn0(self, opcode: u8, cycles: u8) -> InstructionMeta {
         InstructionMeta {
             byte: opcode,
             opcode: self,
@@ -114,12 +114,7 @@ impl Opcode {
         }
     }
 
-    const fn insn1(
-        self,
-        opcode: u8,
-        parameter_1: AddressingMode,
-        cycles: usize,
-    ) -> InstructionMeta {
+    const fn insn1(self, opcode: u8, parameter_1: AddressingMode, cycles: u8) -> InstructionMeta {
         InstructionMeta {
             byte: opcode,
             opcode: self,
@@ -134,7 +129,7 @@ impl Opcode {
         opcode: u8,
         parameter_1: AddressingMode,
         parameter_2: AddressingMode,
-        cycles: usize,
+        cycles: u8,
     ) -> InstructionMeta {
         InstructionMeta {
             byte: opcode,
@@ -207,7 +202,7 @@ pub struct InstructionMeta {
     pub opcode: Opcode,
     pub parameter_1: AddressingMode,
     pub parameter_2: AddressingMode,
-    pub cycles: usize,
+    pub cycles: u8,
 }
 
 impl InstructionMeta {

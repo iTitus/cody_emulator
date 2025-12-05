@@ -9,14 +9,15 @@ use crate::device::vid::{HEIGHT, WIDTH};
 use crate::memory::Memory;
 use crate::memory::contiguous::Contiguous;
 use crate::memory::mapped::MappedMemory;
-use log::info;
+use log::{info, trace};
 use pixels::{Pixels, SurfaceTexture};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{DeviceEvent, DeviceId, StartCause, WindowEvent};
@@ -250,7 +251,6 @@ struct State {
 
 impl<M: Memory> ApplicationHandler for App<M> {
     fn new_events(&mut self, _: &ActiveEventLoop, _: StartCause) {
-        self.last_frame_start = Instant::now();
         self.input.step();
     }
 
@@ -313,15 +313,28 @@ impl<M: Memory> ApplicationHandler for App<M> {
                 .unwrap();
         }
 
-        const FPS: f64 = 60.0;
-        const FRAME_TIME: f64 = 1.0 / FPS;
-        loop {
-            // TODO: use cycle count instead of real time?
-            let _ = self.cpu.step_instruction();
-            let elapsed = self.last_frame_start.elapsed().as_secs_f64();
-            if elapsed >= FRAME_TIME {
-                break;
-            }
+        const FPS: f64 = 60.0 / 1.001;
+        const FRAME_NANOS: f64 = FPS / 1000000000.0;
+        const FRAME_DURATION: Duration = Duration::from_nanos((1.0 / FRAME_NANOS) as u64);
+
+        // lock to ~60 fps
+        let elapsed = self.last_frame_start.elapsed();
+        if elapsed < FRAME_DURATION {
+            sleep(FRAME_DURATION - elapsed);
+        }
+
+        const CYCLE_FREQUENCY: f64 = 1000000.0;
+        const CYCLE_FREQUENCY_NANOS: f64 = CYCLE_FREQUENCY / 1000000000.0;
+        const CYCLE_DURATION: Duration = Duration::from_nanos((1.0 / CYCLE_FREQUENCY_NANOS) as u64);
+        const _: () = assert!(CYCLE_DURATION.as_nanos() > 0);
+
+        let now = Instant::now();
+        let realtime_elapsed = now - self.last_frame_start;
+        trace!("frame time: {realtime_elapsed:?}");
+        self.last_frame_start = now;
+        let mut catchup = Duration::ZERO;
+        while catchup < realtime_elapsed {
+            catchup += CYCLE_DURATION * self.cpu.step_instruction() as u32;
         }
 
         state.window.request_redraw();

@@ -26,6 +26,7 @@ pub const VIA_IORA_NO_HANDSHAKE: usize = 0xF;
 pub struct Via {
     registers: [u8; 16],
     key_state: Rc<RefCell<KeyState>>,
+    last_interrupt: usize,
 }
 
 impl Via {
@@ -66,7 +67,9 @@ impl Memory for Via {
         let t1c = u16::from_le_bytes([self.registers[VIA_T1CL], self.registers[VIA_T1CH]]);
         let acr = self.registers[VIA_ACR];
         let ier = self.registers[VIA_IER];
-        if acr == 0x40 && ier == 0xC0 && cycle.is_multiple_of(t1c as usize) {
+        let elapsed = cycle.wrapping_sub(self.last_interrupt);
+        if acr == 0x40 && ier == 0xC0 && elapsed >= t1c as usize {
+            self.last_interrupt = cycle.wrapping_sub(elapsed - t1c as usize);
             Interrupt::irq()
         } else {
             Interrupt::none()
