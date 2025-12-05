@@ -5,47 +5,33 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use strum::{EnumCount, IntoStaticStr};
 
+pub const VIA_IORB: usize = 0x0;
+pub const VIA_IORA: usize = 0x1;
+pub const VIA_DDRB: usize = 0x2;
+pub const VIA_DDRA: usize = 0x3;
+pub const VIA_T1CL: usize = 0x4;
+pub const VIA_T1CH: usize = 0x5;
+pub const VIA_T1LL: usize = 0x6;
+pub const VIA_T1LH: usize = 0x7;
+pub const VIA_T2CL: usize = 0x8;
+pub const VIA_T2CH: usize = 0x9;
+pub const VIA_SR: usize = 0xA;
+pub const VIA_ACR: usize = 0xB;
+pub const VIA_PCR: usize = 0xC;
+pub const VIA_IFR: usize = 0xD;
+pub const VIA_IER: usize = 0xE;
+pub const VIA_IORA_NO_HANDSHAKE: usize = 0xF;
+
 #[derive(Debug, Clone, Default)]
 pub struct Via {
-    /// 0: VIA_IORB
-    ///
-    /// 1: VIA_IORA
-    ///
-    /// 2: VIA_DDRB
-    ///
-    /// 3: VIA_DDRA
-    ///
-    /// 4: VIA_T1CL
-    ///
-    /// 5: VIA_T1CH
-    ///
-    /// 6: VIA_T1LL
-    ///
-    /// 7: VIA_T1LH
-    ///
-    /// 8: VIA_T2CL
-    ///
-    /// 9: VIA_T2CH
-    ///
-    /// A: VIA_SR
-    ///
-    /// B: VIA_ACR
-    ///
-    /// C: VIA_PCR
-    ///
-    /// D: VIA_IFR
-    ///
-    /// E: VIA_IER
-    ///
-    /// F: VIA_IORA (no handshake)
     registers: [u8; 16],
     key_state: Rc<RefCell<KeyState>>,
 }
 
 impl Via {
     fn read_iora(&mut self) -> u8 {
-        let ddr = self.registers[3];
-        let ior = self.registers[1];
+        let ddr = self.registers[VIA_DDRA];
+        let ior = self.registers[VIA_IORA];
         // TODO: only works for cody right now
         assert_eq!(
             ddr, 0x7,
@@ -78,9 +64,16 @@ impl Memory for Via {
         }
     }
 
-    fn update(&mut self, _cycle: usize) -> Interrupt {
-        // TODO: implement timer
-        Interrupt::none()
+    fn update(&mut self, cycle: usize) -> Interrupt {
+        // TODO: properly implement timers and interrupts
+        let t1c = u16::from_le_bytes([self.registers[VIA_T1CL], self.registers[VIA_T1CH]]);
+        let acr = self.registers[VIA_ACR];
+        let ier = self.registers[VIA_IER];
+        if acr == 0x40 && ier == 0xC0 && cycle.is_multiple_of(t1c as usize) {
+            Interrupt::irq()
+        } else {
+            Interrupt::none()
+        }
     }
 }
 
