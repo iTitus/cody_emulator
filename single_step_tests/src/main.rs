@@ -2,13 +2,16 @@ use anyhow::{Context, anyhow};
 use cody_emulator::cpu::{Cpu, Status};
 use cody_emulator::memory::Memory;
 use cody_emulator::memory::contiguous::Contiguous;
+use cody_emulator::memory::logging::{LoggingMemory, MemoryAccess, MemoryAccessType};
 use cody_emulator::opcode::OPCODES;
-use single_step_tests::TestCase;
+use single_step_tests::{CycleOp, TestCase};
 use std::fs;
 use std::fs::File;
 use std::io::BufReader;
 use std::panic::catch_unwind;
 use std::path::Path;
+
+const CHECK_MEMORY_ACCESSES: bool = false;
 
 fn main() -> anyhow::Result<()> {
     // only documented opcodes
@@ -75,7 +78,7 @@ fn collect_test_cases_from_file(path: impl AsRef<Path>) -> anyhow::Result<Vec<Te
 }
 
 fn execute_test_case(test_case: &TestCase) {
-    let memory = Contiguous::new_ram(0x10000);
+    let memory = LoggingMemory::new(Contiguous::new_ram(0x10000));
     let mut cpu = Cpu::new(memory);
     cpu.pc = test_case.initial.pc;
     cpu.s = test_case.initial.s;
@@ -88,6 +91,7 @@ fn execute_test_case(test_case: &TestCase) {
         cpu.memory.write_u8(ram_value.address(), ram_value.value());
     }
 
+    cpu.memory.reset_log();
     let cycles = cpu.step_instruction();
 
     assert_eq!(
@@ -97,6 +101,35 @@ fn execute_test_case(test_case: &TestCase) {
         test_case.cycles.len(),
         cycles
     );
+    if CHECK_MEMORY_ACCESSES {
+        assert_eq!(
+            cpu.memory.log().len(),
+            test_case.cycles.len(),
+            "memory accesses: expected={}, actual={}",
+            test_case.cycles.len(),
+            cpu.memory.log().len()
+        );
+        for (idx, (cycle, &memory_access)) in
+            test_case.cycles.iter().zip(cpu.memory.log()).enumerate()
+        {
+            let expected = MemoryAccess {
+                access_type: match cycle.op() {
+                    CycleOp::Read => MemoryAccessType::Read,
+                    CycleOp::Write => MemoryAccessType::Write,
+                },
+                address: cycle.address(),
+                value: cycle.value(),
+            };
+            assert_eq!(
+                memory_access,
+                expected,
+                "cycle[{}]: expected={:?}, actual={:?}",
+                idx + 1,
+                expected,
+                memory_access
+            );
+        }
+    }
     assert_eq!(
         cpu.pc, test_case.r#final.pc,
         "pc: expected={}, actual={}",
