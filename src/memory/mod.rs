@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 pub mod contiguous;
+pub mod logging;
 pub mod mapped;
 pub mod zero;
 
