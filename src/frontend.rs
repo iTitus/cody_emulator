@@ -46,8 +46,8 @@ pub fn start(
     );
     let mut data = {
         let mut buf = vec![];
-        let mut f = File::open(path).unwrap();
-        f.read_to_end(&mut buf).unwrap();
+        let mut f = File::open(path).expect("error opening binary");
+        f.read_to_end(&mut buf).expect("io error reading binary");
         buf
     };
 
@@ -148,7 +148,7 @@ pub fn start(
 
     // TODO: better UART support
     let uart1_data: Vec<u8> = if let Some(path) = uart1_source {
-        let f = File::open(path.as_ref()).unwrap();
+        let f = File::open(path.as_ref()).expect("error opening uart1 data file");
         let mut r = BufReader::new(f);
         if fix_newlines {
             let mut data = vec![];
@@ -161,7 +161,8 @@ pub fn start(
             data
         } else {
             let mut buf = vec![];
-            r.read_to_end(&mut buf).unwrap();
+            r.read_to_end(&mut buf)
+                .expect("error reading uart1 data file");
             buf
         }
     } else {
@@ -199,9 +200,9 @@ pub fn start(
     };
 
     info!("Starting event loop");
-    let event_loop = EventLoop::new().unwrap();
+    let event_loop = EventLoop::new().expect("event loop created");
     event_loop.set_control_flow(ControlFlow::Poll);
-    event_loop.run_app(&mut app).unwrap();
+    event_loop.run_app(&mut app).expect("application running");
 }
 
 struct App<M> {
@@ -231,13 +232,13 @@ impl<M: Memory> ApplicationHandler for App<M> {
                         .with_title("Cody")
                         .with_min_inner_size(LogicalSize::new(WIDTH, HEIGHT)),
                 )
-                .unwrap(),
+                .expect("window created"),
         );
         let pixels = {
             let window_size = window.inner_size();
             let surface_texture =
                 SurfaceTexture::new(window_size.width, window_size.height, Arc::clone(&window));
-            Pixels::new(WIDTH, HEIGHT, surface_texture).unwrap()
+            Pixels::new(WIDTH, HEIGHT, surface_texture).expect("pixels framebuffer created")
         };
         self.state = Some(State { window, pixels });
     }
@@ -279,7 +280,7 @@ impl<M: Memory> ApplicationHandler for App<M> {
             state
                 .pixels
                 .resize_surface(size.width, size.height)
-                .unwrap();
+                .expect("framebuffer resized");
         }
 
         const FPS: f64 = 60.0 / 1.001;
