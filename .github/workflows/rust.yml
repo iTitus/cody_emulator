@@ -41,7 +41,7 @@ jobs:
       - name: Build binaries in "${{ matrix.BUILD_TARGET }}" mode
         run: cargo build --verbose --profile ${{ matrix.BUILD_TARGET }}
       - name: Upload release artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         if: ${{ matrix.BUILD_TARGET == 'release'}}
         with:
           name: cody_emulator_${{ matrix.OS }}_${{ matrix.BUILD_TARGET }}
