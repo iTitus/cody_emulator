@@ -20,7 +20,7 @@ itertools = "0.14"
 lazy_static = "1.5"
 log = "0.4"
 num_enum = "0.7"
-strum = { version = "0.27", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 thiserror = "2"
 
 # graphics
