@@ -117,6 +117,11 @@ impl AudioMmioDevice {
         self.engine.synth_sample_rate()
     }
 
+    /// Updates CPU timing to keep audio in sync with the emulator clock.
+    pub fn update_cpu_hz(&mut self, cpu_hz: f64) {
+        self.engine.update_cpu_hz(cpu_hz);
+    }
+
     /// Queues a register write tagged with the most recent CPU cycle.
     fn queue_write_event(&mut self, register: u8, value: u8) {
         log::trace!("Audio MMIO write: reg 0x{:02X} = 0x{:02X} @ cycle {}", register, value, self.last_cycle);

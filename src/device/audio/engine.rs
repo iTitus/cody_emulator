@@ -286,6 +286,29 @@ impl AudioEngine {
         self.synth_sample_rate
     }
 
+    /// Updates CPU timing when the emulator CPU speed diverges from the nominal clock.
+    pub fn update_cpu_hz(&mut self, cpu_hz: f64) {
+        let new_cpu_hz = cpu_hz.max(1.0);
+        let current_cpu_hz = self.cpu_cycles_per_sample * self.synth_sample_rate as f64;
+        let rel_delta = (new_cpu_hz - current_cpu_hz).abs() / current_cpu_hz.max(1.0);
+        if rel_delta < 0.02 {
+            return;
+        }
+
+        self.cpu_cycles_per_sample = new_cpu_hz / self.synth_sample_rate as f64;
+        let target_latency_samples = self.runtime.target_latency_samples().max(1);
+        self.target_latency_cycles = target_latency_samples as f64 * self.cpu_cycles_per_sample;
+        self.history_horizon_cycles = (new_cpu_hz as usize).max(8192);
+
+        log::trace!(
+            "Audio engine retuned: cpu_hz={:.2}, cycles_per_sample={:.3}, target_latency_cycles={:.1} (~{} samples)",
+            new_cpu_hz,
+            self.cpu_cycles_per_sample,
+            self.target_latency_cycles,
+            target_latency_samples
+        );
+    }
+
     /// Advances synthesis toward `cpu_cycle` while maintaining target latency.
     pub fn advance_to_cpu_cycle(&mut self, cpu_cycle: usize) {
         self.last_cpu_cycle = cpu_cycle;
