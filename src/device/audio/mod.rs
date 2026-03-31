@@ -12,6 +12,7 @@ pub mod host;
 pub mod mmiodev;
 pub mod postprocess;
 pub mod queue;
+pub mod registers;
 pub mod synth;
 
 #[derive(Debug, Clone, Copy)]
@@ -60,4 +61,4 @@ pub use postprocess::{
     AudioPostProcessConfig,
     AudioPostProcessor,
 };
-pub use synth::AudioRegister;
+pub use registers::AudioRegister;

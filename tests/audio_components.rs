@@ -17,7 +17,8 @@ use cody_emulator::device::audio::postprocess::{
 };
 use cody_emulator::device::audio::mmiodev::{AudioMmioDevice, AUDIO_BASE, AUDIO_REGISTER_COUNT};
 use cody_emulator::device::audio::queue::{BoundedQueue, PcmRingBuffer};
-use cody_emulator::device::audio::synth::{AudioRegister, SidLikeSynth};
+use cody_emulator::device::audio::registers::AudioRegister;
+use cody_emulator::device::audio::synth::SidLikeSynth;
 use cody_emulator::cpu;
 use cody_emulator::cpu::Cpu;
 use cody_emulator::memory::contiguous::Contiguous;

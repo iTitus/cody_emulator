@@ -13,7 +13,7 @@ use crate::device::audio::factory::{
 };
 use crate::device::audio::AudioConfig;
 use crate::device::audio::compute_soft_cap_samples;
-use crate::device::audio::synth::AudioRegister;
+use crate::device::audio::registers::AudioRegister;
 use crate::interrupt::Interrupt;
 use crate::memory::Memory;
 

@@ -6,7 +6,8 @@
 
 use crate::device::audio::queue::{LockFreePcmRingBuffer, LockFreeQueue};
 use crate::device::audio::AudioConfig;
-use crate::device::audio::synth::{AudioRegister, SidLikeSynth};
+use crate::device::audio::registers::AudioRegister;
+use crate::device::audio::synth::SidLikeSynth;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
