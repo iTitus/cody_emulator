@@ -1,5 +1,9 @@
 use crate::cpu;
 use crate::cpu::Cpu;
+use crate::device::audio::factory::create_audio_pipeline;
+use crate::device::audio::host::CpalHost;
+use crate::device::audio::mmiodev::{AUDIO_BASE, AUDIO_REGISTER_COUNT};
+use crate::device::audio::postprocess::AudioPostProcessConfig;
 use crate::device::blanking::BlankingRegister;
 use crate::device::keyboard::{Keyboard, KeyboardEmulation};
 use crate::device::uart::{UART_END, UART1_BASE, UART2_BASE, Uart, UartSource};
@@ -120,11 +124,8 @@ pub fn start(
     }
     drop(data);
 
-    if let Some(reset_vector) = reset_vector.or(if as_cartridge {
-        Some(load_address)
-    } else {
-        None
-    }) {
+    let reset_vector = reset_vector.or(Some(load_address));
+    if let Some(reset_vector) = reset_vector {
         info!("Setting reset vector to 0x{reset_vector:04X}");
         rom.force_write_u16(cpu::RESET_VECTOR - 0xE000, reset_vector);
     }
@@ -181,6 +182,13 @@ pub fn start(
     );
     memory.add_memory(UART2_BASE, UART_END, uart2);
 
+    let (audio, audio_post_processor) = create_audio_pipeline();
+    let mut audio_host = CpalHost::new(audio_post_processor, AudioPostProcessConfig::default());
+    if !audio_host.wait_ready(Duration::from_secs(3)) {
+        info!("Audio output not ready yet; continuing startup");
+    }
+    memory.add_memory(AUDIO_BASE, AUDIO_REGISTER_COUNT, audio);
+
     memory.add_memory(0xD000, 0x1, BlankingRegister::default());
 
     let mut app = App {
@@ -195,8 +203,14 @@ pub fn start(
             key_state,
         ),
         fast,
+        _audio_host: audio_host,
         last_frame_start: Instant::now(),
+        stats_last: Instant::now(),
+        stats_cycles: 0,
+        stats_instructions: 0,
         input: WinitInputHelper::new(),
+        cycle_budget: 0.0,
+        first_budget: true,
     };
 
     info!("Starting event loop");
@@ -210,8 +224,14 @@ struct App<M> {
     cpu: Cpu<M>,
     keyboard: Keyboard,
     fast: bool,
+    _audio_host: CpalHost,
     last_frame_start: Instant,
+    stats_last: Instant,
+    stats_cycles: u64,
+    stats_instructions: u64,
     input: WinitInputHelper,
+    cycle_budget: f64,
+    first_budget: bool,
 }
 
 struct State {
@@ -306,24 +326,44 @@ impl<M: Memory> ApplicationHandler for App<M> {
             }
 
             const CYCLE_FREQUENCY: f64 = 1000000.0;
-            const CYCLE_FREQUENCY_NANOS: f64 = CYCLE_FREQUENCY / 1000000000.0;
-            const CYCLE_DURATION: Duration =
-                Duration::from_nanos((1.0 / CYCLE_FREQUENCY_NANOS) as u64);
-            const _: () = assert!(CYCLE_DURATION.as_nanos() > 0);
-
             let now = Instant::now();
             let realtime_elapsed = now - self.last_frame_start;
             self.last_frame_start = now;
-            let mut catchup = Duration::ZERO;
-            while catchup < realtime_elapsed {
+            let elapsed_for_budget = if self.first_budget {
+                self.first_budget = false;
+                // Seed the first budget with one frame's worth of time.
+                FRAME_DURATION
+            } else {
+                realtime_elapsed
+            };
+            self.cycle_budget += elapsed_for_budget.as_secs_f64() * CYCLE_FREQUENCY;
+            while self.cycle_budget > 0.0 {
                 let cycles = self.cpu.step_instruction();
                 total_cycles += cycles as usize;
                 total_instructions += 1;
-                catchup += CYCLE_DURATION * cycles as u32;
+                self.cycle_budget -= cycles as f64;
             }
 
             realtime_elapsed
         };
+
+        self.stats_cycles += total_cycles as u64;
+        self.stats_instructions += total_instructions as u64;
+        let stats_elapsed = self.stats_last.elapsed();
+        if stats_elapsed >= Duration::from_secs(1) {
+            let secs = stats_elapsed.as_secs_f64().max(0.001);
+            let cycles_per_sec = self.stats_cycles as f64 / secs;
+            let instr_per_sec = self.stats_instructions as f64 / secs;
+            info!(
+                "runtime: {:.0} cycles/s, {:.0} instr/s, frame_time={:?}",
+                cycles_per_sec,
+                instr_per_sec,
+                frame_time
+            );
+            self.stats_last = Instant::now();
+            self.stats_cycles = 0;
+            self.stats_instructions = 0;
+        }
         trace!(
             "frame time: {frame_time:?}, instructions: {total_instructions}, cycles: {total_cycles}"
         );

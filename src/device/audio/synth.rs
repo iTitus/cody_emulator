@@ -1,0 +1,394 @@
+//! SID-like synthesizer core used by the emulator audio engine.
+//!
+//! The synth models three voices with basic waveform generation, ADSR-style
+//! envelopes, and simple control-register semantics aligned with Cody's audio
+//! register map.
+
+use std::array;
+
+/// Total number of addressable audio registers.
+pub const REGISTER_COUNT: usize = 0x20;
+/// Number of synth voices.
+pub const VOICE_COUNT: usize = 3;
+/// Register stride per voice block.
+pub const VOICE_STRIDE: usize = 7;
+
+/// Symbolic register names for the audio MMIO block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AudioRegister {
+    // Voice 0
+    V0FreqLo = 0x00,
+    V0FreqHi = 0x01,
+    V0PwLo = 0x02,
+    V0PwHi = 0x03,
+    V0Control = 0x04,
+    V0Ad = 0x05,
+    V0Sr = 0x06,
+
+    // Voice 1
+    V1FreqLo = 0x07,
+    V1FreqHi = 0x08,
+    V1PwLo = 0x09,
+    V1PwHi = 0x0A,
+    V1Control = 0x0B,
+    V1Ad = 0x0C,
+    V1Sr = 0x0D,
+
+    // Voice 2
+    V2FreqLo = 0x0E,
+    V2FreqHi = 0x0F,
+    V2PwLo = 0x10,
+    V2PwHi = 0x11,
+    V2Control = 0x12,
+    V2Ad = 0x13,
+    V2Sr = 0x14,
+
+    // Filter and volume
+    FilterCutoffLo = 0x15,
+    FilterCutoffHi = 0x16,
+    FilterResMode = 0x17,
+    FilterModeVolume = 0x18,
+
+    // Readback (read-only)
+    Osc3Read = 0x1B,
+    Env3Read = 0x1C,
+}
+
+impl AudioRegister {
+    /// Decodes a raw register offset into a symbolic register name.
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0x00 => Some(AudioRegister::V0FreqLo),
+            0x01 => Some(AudioRegister::V0FreqHi),
+            0x02 => Some(AudioRegister::V0PwLo),
+            0x03 => Some(AudioRegister::V0PwHi),
+            0x04 => Some(AudioRegister::V0Control),
+            0x05 => Some(AudioRegister::V0Ad),
+            0x06 => Some(AudioRegister::V0Sr),
+            0x07 => Some(AudioRegister::V1FreqLo),
+            0x08 => Some(AudioRegister::V1FreqHi),
+            0x09 => Some(AudioRegister::V1PwLo),
+            0x0A => Some(AudioRegister::V1PwHi),
+            0x0B => Some(AudioRegister::V1Control),
+            0x0C => Some(AudioRegister::V1Ad),
+            0x0D => Some(AudioRegister::V1Sr),
+            0x0E => Some(AudioRegister::V2FreqLo),
+            0x0F => Some(AudioRegister::V2FreqHi),
+            0x10 => Some(AudioRegister::V2PwLo),
+            0x11 => Some(AudioRegister::V2PwHi),
+            0x12 => Some(AudioRegister::V2Control),
+            0x13 => Some(AudioRegister::V2Ad),
+            0x14 => Some(AudioRegister::V2Sr),
+            0x15 => Some(AudioRegister::FilterCutoffLo),
+            0x16 => Some(AudioRegister::FilterCutoffHi),
+            0x17 => Some(AudioRegister::FilterResMode),
+            0x18 => Some(AudioRegister::FilterModeVolume),
+            0x1B => Some(AudioRegister::Osc3Read),
+            0x1C => Some(AudioRegister::Env3Read),
+            _ => None,
+        }
+    }
+
+    /// Returns the raw register offset.
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+const CTRL_GATE: u8 = 0x01;
+const CTRL_SYNC: u8 = 0x02;
+const CTRL_RING: u8 = 0x04;
+const CTRL_TEST: u8 = 0x08;
+const CTRL_TRIANGLE: u8 = 0x10;
+const CTRL_SAW: u8 = 0x20;
+const CTRL_PULSE: u8 = 0x40;
+const CTRL_NOISE: u8 = 0x80;
+
+const ATTACK_TIMES_SEC: [f32; 16] = [
+    0.002, 0.008, 0.016, 0.024, 0.038, 0.056, 0.068, 0.080, 0.100, 0.250, 0.500, 0.800, 1.000,
+    3.000, 5.000, 8.000,
+];
+
+const DECAY_RELEASE_TIMES_SEC: [f32; 16] = [
+    0.006, 0.024, 0.048, 0.072, 0.114, 0.168, 0.204, 0.240, 0.300, 0.750, 1.500, 2.400, 3.000,
+    9.000, 15.000, 24.000,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnvelopePhase {
+    Attack,
+    DecaySustain,
+    Release,
+}
+
+/// Internal per-voice oscillator and envelope state.
+#[derive(Debug, Clone, Copy)]
+struct VoiceState {
+    phase: u16,
+    envelope: f32,
+    env_phase: EnvelopePhase,
+    last_gate: bool,
+    noise_lfsr: u16,
+    noise_phase_bit: u8,
+}
+
+impl Default for VoiceState {
+    fn default() -> Self {
+        Self {
+            phase: 0,
+            envelope: 0.0,
+            env_phase: EnvelopePhase::Release,
+            last_gate: false,
+            noise_lfsr: 0xACE1,
+            noise_phase_bit: 0,
+        }
+    }
+}
+
+/// SID-like synth state and register file.
+#[derive(Debug, Clone)]
+pub struct SidLikeSynth {
+    pub registers: [u8; REGISTER_COUNT],
+    voices: [VoiceState; VOICE_COUNT],
+}
+
+impl Default for SidLikeSynth {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SidLikeSynth {
+    /// Creates a new synth with initial voice state.
+    pub fn new() -> Self {
+        let mut voices = array::from_fn(|_| VoiceState::default());
+        voices[1].noise_lfsr = 0xBEEF;
+        voices[2].noise_lfsr = 0xC0DE;
+
+        Self {
+            registers: [0; REGISTER_COUNT],
+            voices,
+        }
+    }
+
+    /// Writes a register, ignoring out-of-range and read-only targets.
+    pub fn write_register(&mut self, address: u8, value: u8) {
+        let index = address as usize;
+        if index >= REGISTER_COUNT {
+            return;
+        }
+
+        // Reject writes to read-only registers
+        if address == AudioRegister::Osc3Read.as_u8() || address == AudioRegister::Env3Read.as_u8() {
+            return;
+        }
+
+        self.registers[index] = value;
+    }
+
+    /// Reads a raw register value or `0` for out-of-range addresses.
+    pub fn read_register(&self, address: u8) -> u8 {
+        let index = address as usize;
+        if index >= REGISTER_COUNT {
+            return 0;
+        }
+        self.registers[index]
+    }
+
+    /// Returns current voice 3 oscillator readback value.
+    pub fn osc3_readback(&self) -> u8 {
+        (self.voices[2].phase >> 8) as u8
+    }
+
+    /// Returns current voice 3 envelope readback value.
+    pub fn env3_readback(&self) -> u8 {
+        (self.voices[2].envelope.clamp(0.0, 1.0) * 255.0) as u8
+    }
+
+    /// Renders a single mono sample at `sample_rate_hz`.
+    pub fn render_sample(&mut self, sample_rate_hz: u32) -> f32 {
+        let sample_rate_hz = sample_rate_hz.max(1) as f32;  // TODO: handle limit somewhere else
+
+        let mut controls = [0u8; VOICE_COUNT];
+        let mut wrapped = [false; VOICE_COUNT];
+
+        for i in 0..VOICE_COUNT {
+            let base = i * VOICE_STRIDE;
+            let control = self.registers[base + 4];
+            controls[i] = control;
+
+            if (control & CTRL_TEST) != 0 {
+                self.voices[i].phase = 0;
+                self.voices[i].envelope = 0.0;
+                self.voices[i].env_phase = EnvelopePhase::Release;
+                self.voices[i].last_gate = false;
+                self.voices[i].noise_phase_bit = 0;
+                continue;
+            }
+
+            let freq = u16::from_le_bytes([self.registers[base], self.registers[base + 1]]);
+            let phase_increment = freq >> 2;
+            let previous_phase = self.voices[i].phase;
+            let new_phase = previous_phase.wrapping_add(phase_increment);
+            wrapped[i] = new_phase < previous_phase;
+            self.voices[i].phase = new_phase;
+
+            self.update_envelope(i, control, sample_rate_hz);
+        }
+
+        for i in 0..VOICE_COUNT {
+            if (controls[i] & CTRL_SYNC) == 0 {
+                continue;
+            }
+
+            let mod_index = match i {
+                0 => 2,
+                1 => 0,
+                _ => 1,
+            };
+            if wrapped[mod_index] {
+                self.voices[i].phase = 0;
+            }
+        }
+
+        let mut outputs = [0.0f32; VOICE_COUNT];
+
+        for i in 0..VOICE_COUNT {
+            let base = i * VOICE_STRIDE;
+            let control = controls[i];
+            if (control & CTRL_TEST) != 0 {
+                continue;
+            }
+
+            let mut wave = self.waveform_for_voice(i, control, base);
+            if (control & CTRL_RING) != 0 {
+                let mod_index = match i {
+                    0 => 2,
+                    1 => 0,
+                    _ => 1,
+                };
+                if (self.voices[mod_index].phase & 0x8000) != 0 {
+                    wave = -wave;
+                }
+            }
+
+            let envelope = self.voices[i].envelope.clamp(0.0, 1.0);
+            outputs[i] = wave * envelope;
+        }
+
+        let volume = (self.registers[AudioRegister::FilterModeVolume.as_u8() as usize] & 0x0F) as f32 / 15.0;
+        let mute_voice3 = (self.registers[AudioRegister::FilterModeVolume.as_u8() as usize] & 0x80) != 0;
+
+        let mut mix = outputs[0] + outputs[1];
+        if !mute_voice3 {
+            mix += outputs[2];
+        }
+
+        (mix / 3.0 * volume).clamp(-1.0, 1.0)
+    }
+
+    /// Updates one voice ADSR state from control and AD/SR registers.
+    fn update_envelope(&mut self, voice_index: usize, control: u8, sample_rate_hz: f32) {
+        let base = voice_index * VOICE_STRIDE;
+        let ad = self.registers[base + 5];
+        let sr = self.registers[base + 6];
+
+        let attack_nibble = (ad >> 4) as usize;
+        let decay_nibble = (ad & 0x0F) as usize;
+        let sustain_nibble = (sr >> 4) as usize;
+        let release_nibble = (sr & 0x0F) as usize;
+
+        let gate = (control & CTRL_GATE) != 0;
+        let voice = &mut self.voices[voice_index];
+
+        if gate && !voice.last_gate {
+            voice.env_phase = EnvelopePhase::Attack;
+        } else if !gate && voice.last_gate {
+            voice.env_phase = EnvelopePhase::Release;
+        }
+        voice.last_gate = gate;
+
+        let attack_step = envelope_step(ATTACK_TIMES_SEC[attack_nibble], sample_rate_hz);
+        let decay_step = envelope_step(DECAY_RELEASE_TIMES_SEC[decay_nibble], sample_rate_hz);
+        let release_step = envelope_step(DECAY_RELEASE_TIMES_SEC[release_nibble], sample_rate_hz);
+        let sustain_level = sustain_nibble as f32 / 15.0;
+
+        match voice.env_phase {
+            EnvelopePhase::Attack => {
+                voice.envelope += attack_step;
+                if voice.envelope >= 1.0 {
+                    voice.envelope = 1.0;
+                    voice.env_phase = EnvelopePhase::DecaySustain;
+                }
+            }
+            EnvelopePhase::DecaySustain => {
+                if voice.envelope > sustain_level {
+                    voice.envelope = (voice.envelope - decay_step).max(sustain_level);
+                }
+            }
+            EnvelopePhase::Release => {
+                voice.envelope = (voice.envelope - release_step).max(0.0);
+            }
+        }
+    }
+
+    /// Produces one raw waveform sample for a voice before envelope scaling.
+    fn waveform_for_voice(&mut self, voice_index: usize, control: u8, base: usize) -> f32 {
+        let phase = self.voices[voice_index].phase;
+
+        if (control & CTRL_TRIANGLE) != 0 {
+            return triangle(phase);
+        }
+        if (control & CTRL_SAW) != 0 {
+            return saw(phase);
+        }
+        if (control & CTRL_PULSE) != 0 {
+            let pulse = ((self.registers[base + 3] as u16 & 0x0F) << 8) | self.registers[base + 2] as u16;
+            let threshold = pulse << 4;
+            return if phase < threshold { 1.0 } else { -1.0 };
+        }
+        if (control & CTRL_NOISE) != 0 {
+            let phase_bit = ((phase >> 14) & 0x01) as u8;
+            let voice = &mut self.voices[voice_index];
+            if phase_bit != voice.noise_phase_bit {
+                let feedback = ((voice.noise_lfsr >> 0)
+                    ^ (voice.noise_lfsr >> 2)
+                    ^ (voice.noise_lfsr >> 3)
+                    ^ (voice.noise_lfsr >> 5))
+                    & 1;
+                voice.noise_lfsr = (voice.noise_lfsr >> 1) | (feedback << 15);
+                voice.noise_phase_bit = phase_bit;
+            }
+            let normalized = voice.noise_lfsr as f32 / 65535.0;
+            return normalized * 2.0 - 1.0;
+        }
+
+        0.0
+    }
+}
+
+/// Converts an envelope segment duration to a per-sample delta.
+fn envelope_step(seconds: f32, sample_rate_hz: f32) -> f32 {
+    if seconds <= 0.0 || sample_rate_hz <= 0.0 {
+        1.0
+    } else {
+        (1.0 / (seconds * sample_rate_hz)).clamp(0.000_000_1, 1.0)
+    }
+}
+
+/// Triangle waveform from 16-bit phase.
+fn triangle(phase: u16) -> f32 {
+    let p = phase as u32;
+    let value = if p < 32768 {
+        p * 2
+    } else {
+        (65535 - p) * 2
+    };
+    value as f32 / 32767.5 - 1.0
+}
+
+/// Sawtooth waveform from 16-bit phase.
+fn saw(phase: u16) -> f32 {
+    phase as f32 / 32767.5 - 1.0
+}

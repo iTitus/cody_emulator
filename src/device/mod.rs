@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod blanking;
 pub mod keyboard;
 pub mod uart;

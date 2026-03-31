@@ -11,6 +11,10 @@ license = "MIT"
 resolver = "3"
 members = ["single_step_tests"]
 
+[features]
+default = ["cpal-backend"]
+cpal-backend = ["dep:cpal"]
+
 [dependencies]
 bitfields = "1.0"
 clap = { version = "4.6", features = ["derive"] }
@@ -22,6 +26,8 @@ log = "0.4"
 num_enum = "0.7"
 strum = { version = "0.28", features = ["derive"] }
 thiserror = "2"
+cpal = { version = "0.15", optional = true }
+crossbeam-queue = "0.3"
 
 # graphics
 bytemuck = { version = "1.25", features = ["derive"] }
