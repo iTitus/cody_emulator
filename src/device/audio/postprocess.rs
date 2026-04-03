@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 pub struct AudioPostProcessConfig {
     pub sample_rate_hz: u32,
     pub channels: usize,
+    pub preferred_output_buffer_frames: u32,
 }
 
 impl Default for AudioPostProcessConfig {
@@ -30,6 +31,7 @@ impl Default for AudioPostProcessConfig {
         Self {
             sample_rate_hz: 48_000,
             channels: 2,
+            preferred_output_buffer_frames: 256,
         }
     }
 }

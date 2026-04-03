@@ -41,6 +41,8 @@ struct MonitorState {
     last_dropped_stale: u64,
     was_below_target: bool,
     was_above_soft_cap: bool,
+    last_consumed_samples: u64,
+    no_consume_seconds: u64,
 }
 
 #[cfg(feature = "cpal-backend")]
@@ -49,7 +51,78 @@ impl AdaptiveMonitor {
     const UNDERRUN_SECS_THRESHOLD: u64 = 3;
     const RECOVERY_SECS_THRESHOLD: u64 = 60;
     const MIN_BUFFER_MIN: u32 = 128;
-    const MIN_RECOVERY_BUFFER: u32 = 1024;
+    const NO_CONSUME_SECS_THRESHOLD: u64 = 3;
+
+    fn restart_output_stream(
+        &mut self,
+        stream: &mut Option<cpal::Stream>,
+        state: &mut MonitorState,
+        reason: &str,
+    ) -> bool {
+        use cpal::traits::StreamTrait;
+
+        // Drop the old stream before creating a new one to avoid backend contention.
+        let _old = stream.take();
+
+        let mut new_stream = CpalHost::build_stream(
+            &self.device,
+            self.sample_format,
+            &self.stream_cfg,
+            &self.config,
+            self.runtime.clone(),
+            self.synth_sample_rate,
+            self.config.channels.max(1),
+        );
+
+        if new_stream.is_none() && !matches!(self.stream_cfg.buffer_size, cpal::BufferSize::Default)
+        {
+            log::warn!(
+                "CPAL: rebuild failed for reason='{reason}' with buffer_size={:?}; retrying with default buffer_size",
+                self.stream_cfg.buffer_size
+            );
+            self.stream_cfg.buffer_size = cpal::BufferSize::Default;
+            new_stream = CpalHost::build_stream(
+                &self.device,
+                self.sample_format,
+                &self.stream_cfg,
+                &self.config,
+                self.runtime.clone(),
+                self.synth_sample_rate,
+                self.config.channels.max(1),
+            );
+        }
+
+        let Some(new_stream) = new_stream else {
+            log::error!(
+                "CPAL: unable to rebuild output stream for reason='{reason}'"
+            );
+            return false;
+        };
+
+        if let Err(err) = new_stream.play() {
+            log::error!(
+                "CPAL: rebuilt stream could not start for reason='{reason}': {err}"
+            );
+            return false;
+        }
+
+        *stream = Some(new_stream);
+        state.no_consume_seconds = 0;
+        state.last_consumed_samples = self.runtime.total_samples_consumed();
+        state.current_size = match self.stream_cfg.buffer_size {
+            cpal::BufferSize::Fixed(size) => Some(size),
+            _ => None,
+        };
+        CpalHost::update_soft_cap(&self.runtime);
+        CpalHost::log_output_config(
+            &self.stream_cfg,
+            self.sample_format,
+            &self.runtime,
+            self.synth_sample_rate,
+        );
+        log::info!("CPAL: output stream restart succeeded (reason='{reason}')");
+        true
+    }
 
     fn monitor_metrics(&mut self, state: &mut MonitorState) {
         let pcm_len = self.runtime.pcm_len();
@@ -93,6 +166,24 @@ impl AdaptiveMonitor {
         state.was_below_target = below_target;
         state.was_above_soft_cap = above_soft_cap;
 
+        let consumed_total = self.runtime.total_samples_consumed();
+        let consumed_delta = consumed_total.saturating_sub(state.last_consumed_samples);
+        state.last_consumed_samples = consumed_total;
+        if consumed_delta == 0 && pcm_len >= target_latency.max(1) {
+            state.no_consume_seconds = state.no_consume_seconds.saturating_add(1);
+            if state.no_consume_seconds == Self::NO_CONSUME_SECS_THRESHOLD {
+                log::warn!(
+                    "CPAL output appears stalled: no samples consumed for {}s (pcm_len={}, target_latency={}, buffer_size={:?})",
+                    state.no_consume_seconds,
+                    pcm_len,
+                    target_latency,
+                    self.stream_cfg.buffer_size
+                );
+            }
+        } else {
+            state.no_consume_seconds = 0;
+        }
+
         let current = self.runtime.underrun_samples();
         let delta = current.saturating_sub(state.last_underruns);
         state.last_underruns = current;
@@ -134,7 +225,46 @@ impl AdaptiveMonitor {
         stream: &mut Option<cpal::Stream>,
         state: &mut MonitorState,
     ) {
-        use cpal::traits::StreamTrait;
+        if state.no_consume_seconds >= Self::NO_CONSUME_SECS_THRESHOLD {
+            let keep_samples = self.runtime.target_latency_samples().max(1);
+            let dropped = self.runtime.trim_pcm_to_samples(keep_samples);
+            if dropped > 0 {
+                log::warn!(
+                    "CPAL stall recovery: dropped {} queued synth samples before restart (keeping {})",
+                    dropped,
+                    keep_samples
+                );
+            }
+            self.runtime.request_engine_resync();
+
+            let base = state.current_size.unwrap_or(Self::MIN_BUFFER_MIN);
+            let desired_min = base
+                .saturating_mul(2)
+                .max(self.config.preferred_output_buffer_frames.max(Self::MIN_BUFFER_MIN));
+            if let Some(buffer_size) = CpalHost::pick_buffer_size(
+                &self.device,
+                self.sample_format,
+                self.stream_cfg.channels,
+                self.stream_cfg.sample_rate.0,
+                desired_min,
+            ) {
+                self.stream_cfg.buffer_size = buffer_size;
+                if let cpal::BufferSize::Fixed(size) = self.stream_cfg.buffer_size {
+                    if state.current_size != Some(size) {
+                        log::warn!(
+                            "CPAL: increasing buffer_size to {} for stalled consumption recovery",
+                            size
+                        );
+                    }
+                    state.current_size = Some(size);
+                }
+            }
+            log::warn!(
+                "CPAL: restarting output stream due to stalled consumption ({}s)",
+                state.no_consume_seconds
+            );
+            let _ = self.restart_output_stream(stream, state, "stalled-consumption");
+        }
 
         if state.consecutive_underruns >= Self::UNDERRUN_SECS_THRESHOLD {
             let base = state.current_size.unwrap_or(Self::MIN_BUFFER_MIN);
@@ -152,29 +282,10 @@ impl AdaptiveMonitor {
                 };
                 if state.current_size != Some(new_size) {
                     self.stream_cfg.buffer_size = buffer_size;
-                    let new_stream = CpalHost::build_stream(
-                        &self.device,
-                        self.sample_format,
-                        &self.stream_cfg,
-                        &self.config,
-                        self.runtime.clone(),
-                        self.synth_sample_rate,
-                        self.config.channels.max(1),
-                    );
-                    if let Some(new_stream) = new_stream {
-                        if new_stream.play().is_ok() {
-                            *stream = Some(new_stream);
-                            if let cpal::BufferSize::Fixed(size) = self.stream_cfg.buffer_size {
-                                state.current_size = Some(size);
-                                log::warn!("CPAL: increased buffer_size to {}", size);
-                                CpalHost::update_soft_cap(&self.runtime);
-                            }
-                            CpalHost::log_output_config(
-                                &self.stream_cfg,
-                                self.sample_format,
-                                &self.runtime,
-                                self.synth_sample_rate,
-                            );
+                    if self.restart_output_stream(stream, state, "underrun-rebalance") {
+                        if let cpal::BufferSize::Fixed(size) = self.stream_cfg.buffer_size {
+                            state.current_size = Some(size);
+                            log::warn!("CPAL: increased buffer_size to {}", size);
                         }
                     }
                 }
@@ -182,11 +293,15 @@ impl AdaptiveMonitor {
             state.consecutive_underruns = 0;
         }
 
+        let recovery_floor = self
+            .config
+            .preferred_output_buffer_frames
+            .max(Self::MIN_BUFFER_MIN);
         if let Some(size) = state.current_size
-            && size > Self::MIN_RECOVERY_BUFFER
+            && size > recovery_floor
             && state.clean_seconds >= Self::RECOVERY_SECS_THRESHOLD
         {
-            let desired = (size / 2).max(Self::MIN_RECOVERY_BUFFER);
+            let desired = (size / 2).max(recovery_floor);
             let desired_min = desired;
             if let Some(buffer_size) = CpalHost::pick_buffer_size(
                 &self.device,
@@ -198,29 +313,10 @@ impl AdaptiveMonitor {
                 if let cpal::BufferSize::Fixed(new_size) = buffer_size {
                     if new_size < size {
                         self.stream_cfg.buffer_size = buffer_size;
-                        let new_stream = CpalHost::build_stream(
-                            &self.device,
-                            self.sample_format,
-                            &self.stream_cfg,
-                            &self.config,
-                            self.runtime.clone(),
-                            self.synth_sample_rate,
-                            self.config.channels.max(1),
-                        );
-                        if let Some(new_stream) = new_stream {
-                            if new_stream.play().is_ok() {
-                                *stream = Some(new_stream);
-                                state.current_size = Some(new_size);
-                                log::info!("CPAL: reduced buffer_size to {}", new_size);
-                                state.clean_seconds = 0;
-                                CpalHost::update_soft_cap(&self.runtime);
-                                CpalHost::log_output_config(
-                                    &self.stream_cfg,
-                                    self.sample_format,
-                                    &self.runtime,
-                                    self.synth_sample_rate,
-                                );
-                            }
+                        if self.restart_output_stream(stream, state, "latency-recovery") {
+                            state.current_size = Some(new_size);
+                            log::info!("CPAL: reduced buffer_size to {}", new_size);
+                            state.clean_seconds = 0;
                         }
                     }
                 }
@@ -261,12 +357,12 @@ impl AdaptiveMonitor {
                 return;
             }
         };
-        let _ = ready_tx.send(());
         // Stream start delay disabled while priming gate handles startup.
         if let Err(err) = stream.play() {
             log::warn!("Unable to start CPAL output stream: {err}");
             return;
         }
+        let _ = ready_tx.send(());
         CpalHost::update_soft_cap(&self.runtime);
         CpalHost::log_output_config(
             &self.stream_cfg,
@@ -288,13 +384,12 @@ impl AdaptiveMonitor {
             last_dropped_stale: self.runtime.dropped_stale_events(),
             was_below_target: false,
             was_above_soft_cap: false,
+            last_consumed_samples: self.runtime.total_samples_consumed(),
+            no_consume_seconds: 0,
         };
 
         loop {
             thread::sleep(Duration::from_secs(1));
-            if stream.is_none() {
-                return;
-            }
             self.monitor_metrics(&mut state);
             self.rebalance_stream(&mut stream, &mut state);
         }
@@ -414,7 +509,7 @@ impl CpalHost {
 
         let mut stream_cfg = default_cfg.config();
         let sample_format = default_cfg.sample_format();
-        let preferred_min = 128u32;
+        let preferred_min = config.preferred_output_buffer_frames.max(128);
         if let Some(buffer_size) = Self::pick_buffer_size(
             &device,
             sample_format,

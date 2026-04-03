@@ -1,4 +1,5 @@
 use clap::Parser;
+use clap::ValueEnum;
 use clap_num::maybe_hex;
 use cody_emulator::assembler::disassemble;
 use cody_emulator::frontend;
@@ -49,9 +50,34 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     fast: bool,
 
+    /// Audio output latency preset (requested CPAL output buffer size in frames).
+    #[arg(long, value_enum, default_value_t = AudioLatencyPreset::Default)]
+    audio_latency: AudioLatencyPreset,
+
     /// Each time this option is added increases the default logging level
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum AudioLatencyPreset {
+    Low,
+    Default,
+    Medium,
+    High,
+    Generous,
+}
+
+impl AudioLatencyPreset {
+    const fn buffer_frames(self) -> u32 {
+        match self {
+            Self::Low => 128,
+            Self::Default => 256,
+            Self::Medium => 512,
+            Self::High => 1024,
+            Self::Generous => 2048,
+        }
+    }
 }
 
 pub fn main() {
@@ -82,6 +108,7 @@ pub fn main() {
         cli.fix_newlines,
         cli.physical_keyboard,
         cli.fast,
+        cli.audio_latency.buffer_frames(),
     );
 }
 
