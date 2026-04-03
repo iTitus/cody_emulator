@@ -8,6 +8,7 @@ use crate::device::audio::compute_soft_cap_samples;
 use crate::device::audio::engine::SharedAudioDataPlane;
 use crate::device::audio::postprocess::{AudioPostProcessConfig, AudioPostProcessor};
 use std::sync::mpsc;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::time::Duration;
 
@@ -33,300 +34,18 @@ struct AdaptiveMonitor {
 
 #[cfg(feature = "cpal-backend")]
 struct MonitorState {
-    last_underruns: u64,
-    consecutive_underruns: u64,
-    clean_seconds: u64,
-    current_size: Option<u32>,
-    last_pcm_len: usize,
-    last_dropped_stale: u64,
-    was_below_target: bool,
-    was_above_soft_cap: bool,
-    last_consumed_samples: u64,
-    no_consume_seconds: u64,
+    last_callback_epoch: u64,
+    no_callback_seconds: u64,
 }
 
 #[cfg(feature = "cpal-backend")]
 impl AdaptiveMonitor {
-    const UNDERRUNS_PER_SEC_THRESHOLD: u64 = 10;
-    const UNDERRUN_SECS_THRESHOLD: u64 = 3;
-    const RECOVERY_SECS_THRESHOLD: u64 = 60;
-    const MIN_BUFFER_MIN: u32 = 128;
-    const NO_CONSUME_SECS_THRESHOLD: u64 = 3;
+    const FIRST_CALLBACK_TIMEOUT: Duration = Duration::from_secs(5);
+    const NO_CALLBACK_SECS_THRESHOLD: u64 = 3;
+    const RESTART_COOLDOWN: Duration = Duration::from_secs(5);
 
-    fn restart_output_stream(
-        &mut self,
-        stream: &mut Option<cpal::Stream>,
-        state: &mut MonitorState,
-        reason: &str,
-    ) -> bool {
-        use cpal::traits::StreamTrait;
-
-        // Drop the old stream before creating a new one to avoid backend contention.
-        let _old = stream.take();
-
-        let mut new_stream = CpalHost::build_stream(
-            &self.device,
-            self.sample_format,
-            &self.stream_cfg,
-            &self.config,
-            self.runtime.clone(),
-            self.synth_sample_rate,
-            self.config.channels.max(1),
-        );
-
-        if new_stream.is_none() && !matches!(self.stream_cfg.buffer_size, cpal::BufferSize::Default)
-        {
-            log::warn!(
-                "CPAL: rebuild failed for reason='{reason}' with buffer_size={:?}; retrying with default buffer_size",
-                self.stream_cfg.buffer_size
-            );
-            self.stream_cfg.buffer_size = cpal::BufferSize::Default;
-            new_stream = CpalHost::build_stream(
-                &self.device,
-                self.sample_format,
-                &self.stream_cfg,
-                &self.config,
-                self.runtime.clone(),
-                self.synth_sample_rate,
-                self.config.channels.max(1),
-            );
-        }
-
-        let Some(new_stream) = new_stream else {
-            log::error!(
-                "CPAL: unable to rebuild output stream for reason='{reason}'"
-            );
-            return false;
-        };
-
-        if let Err(err) = new_stream.play() {
-            log::error!(
-                "CPAL: rebuilt stream could not start for reason='{reason}': {err}"
-            );
-            return false;
-        }
-
-        *stream = Some(new_stream);
-        state.no_consume_seconds = 0;
-        state.last_consumed_samples = self.runtime.total_samples_consumed();
-        state.current_size = match self.stream_cfg.buffer_size {
-            cpal::BufferSize::Fixed(size) => Some(size),
-            _ => None,
-        };
-        CpalHost::update_soft_cap(&self.runtime);
-        CpalHost::log_output_config(
-            &self.stream_cfg,
-            self.sample_format,
-            &self.runtime,
-            self.synth_sample_rate,
-        );
-        log::info!("CPAL: output stream restart succeeded (reason='{reason}')");
-        true
-    }
-
-    fn monitor_metrics(&mut self, state: &mut MonitorState) {
-        let pcm_len = self.runtime.pcm_len();
-        let target_latency = self.runtime.target_latency_samples();
-        let soft_cap = self.runtime.pcm_soft_cap_samples();
-        let below_target = target_latency > 0 && pcm_len < target_latency;
-        let above_soft_cap = soft_cap > 0 && pcm_len > soft_cap;
-        let delta_pcm = if pcm_len >= state.last_pcm_len {
-            pcm_len - state.last_pcm_len
-        } else {
-            state.last_pcm_len - pcm_len
-        };
-        let change_threshold = target_latency.max(256);
-        if delta_pcm >= change_threshold {
-            log::info!(
-                "CPAL buffer status: pcm_len={} (delta={}), target_latency={}, soft_cap={}, buffer_size={:?}",
-                pcm_len,
-                delta_pcm,
-                target_latency,
-                soft_cap,
-                self.stream_cfg.buffer_size
-            );
-            state.last_pcm_len = pcm_len;
-        }
-        if below_target && !state.was_below_target {
-            log::info!(
-                "CPAL buffer status: pcm_len dropped below target_latency (pcm_len={}, target_latency={}, buffer_size={:?})",
-                pcm_len,
-                target_latency,
-                self.stream_cfg.buffer_size
-            );
-        }
-        if above_soft_cap && !state.was_above_soft_cap {
-            log::warn!(
-                "CPAL buffer status: pcm_len exceeded soft_cap (pcm_len={}, soft_cap={}, buffer_size={:?})",
-                pcm_len,
-                soft_cap,
-                self.stream_cfg.buffer_size
-            );
-        }
-        state.was_below_target = below_target;
-        state.was_above_soft_cap = above_soft_cap;
-
-        let consumed_total = self.runtime.total_samples_consumed();
-        let consumed_delta = consumed_total.saturating_sub(state.last_consumed_samples);
-        state.last_consumed_samples = consumed_total;
-        if consumed_delta == 0 && pcm_len >= target_latency.max(1) {
-            state.no_consume_seconds = state.no_consume_seconds.saturating_add(1);
-            if state.no_consume_seconds == Self::NO_CONSUME_SECS_THRESHOLD {
-                log::warn!(
-                    "CPAL output appears stalled: no samples consumed for {}s (pcm_len={}, target_latency={}, buffer_size={:?})",
-                    state.no_consume_seconds,
-                    pcm_len,
-                    target_latency,
-                    self.stream_cfg.buffer_size
-                );
-            }
-        } else {
-            state.no_consume_seconds = 0;
-        }
-
-        let current = self.runtime.underrun_samples();
-        let delta = current.saturating_sub(state.last_underruns);
-        state.last_underruns = current;
-
-        if delta >= Self::UNDERRUNS_PER_SEC_THRESHOLD {
-            log::warn!(
-                "CPAL underrun spike: +{} in 1s (pcm_len={}, target_latency={}, buffer_size={:?})",
-                delta,
-                pcm_len,
-                target_latency,
-                self.stream_cfg.buffer_size
-            );
-        }
-
-        let dropped_stale = self.runtime.dropped_stale_events();
-        if dropped_stale > state.last_dropped_stale {
-            log::warn!(
-                "CPAL engine dropped stale writes: +{} (total={})",
-                dropped_stale - state.last_dropped_stale,
-                dropped_stale
-            );
-            state.last_dropped_stale = dropped_stale;
-        }
-
-        if delta > Self::UNDERRUNS_PER_SEC_THRESHOLD {
-            state.consecutive_underruns += 1;
-            state.clean_seconds = 0;
-        } else if delta == 0 {
-            state.consecutive_underruns = 0;
-            state.clean_seconds += 1;
-        } else {
-            state.consecutive_underruns = 0;
-            state.clean_seconds = 0;
-        }
-    }
-
-    fn rebalance_stream(
-        &mut self,
-        stream: &mut Option<cpal::Stream>,
-        state: &mut MonitorState,
-    ) {
-        if state.no_consume_seconds >= Self::NO_CONSUME_SECS_THRESHOLD {
-            let keep_samples = self.runtime.target_latency_samples().max(1);
-            let dropped = self.runtime.trim_pcm_to_samples(keep_samples);
-            if dropped > 0 {
-                log::warn!(
-                    "CPAL stall recovery: dropped {} queued synth samples before restart (keeping {})",
-                    dropped,
-                    keep_samples
-                );
-            }
-            self.runtime.request_engine_resync();
-
-            let base = state.current_size.unwrap_or(Self::MIN_BUFFER_MIN);
-            let desired_min = base
-                .saturating_mul(2)
-                .max(self.config.preferred_output_buffer_frames.max(Self::MIN_BUFFER_MIN));
-            if let Some(buffer_size) = CpalHost::pick_buffer_size(
-                &self.device,
-                self.sample_format,
-                self.stream_cfg.channels,
-                self.stream_cfg.sample_rate.0,
-                desired_min,
-            ) {
-                self.stream_cfg.buffer_size = buffer_size;
-                if let cpal::BufferSize::Fixed(size) = self.stream_cfg.buffer_size {
-                    if state.current_size != Some(size) {
-                        log::warn!(
-                            "CPAL: increasing buffer_size to {} for stalled consumption recovery",
-                            size
-                        );
-                    }
-                    state.current_size = Some(size);
-                }
-            }
-            log::warn!(
-                "CPAL: restarting output stream due to stalled consumption ({}s)",
-                state.no_consume_seconds
-            );
-            let _ = self.restart_output_stream(stream, state, "stalled-consumption");
-        }
-
-        if state.consecutive_underruns >= Self::UNDERRUN_SECS_THRESHOLD {
-            let base = state.current_size.unwrap_or(Self::MIN_BUFFER_MIN);
-            let desired_min = base.saturating_mul(2);
-            if let Some(buffer_size) = CpalHost::pick_buffer_size(
-                &self.device,
-                self.sample_format,
-                self.stream_cfg.channels,
-                self.stream_cfg.sample_rate.0,
-                desired_min,
-            ) {
-                let new_size = match buffer_size {
-                    cpal::BufferSize::Fixed(v) => v,
-                    _ => base,
-                };
-                if state.current_size != Some(new_size) {
-                    self.stream_cfg.buffer_size = buffer_size;
-                    if self.restart_output_stream(stream, state, "underrun-rebalance") {
-                        if let cpal::BufferSize::Fixed(size) = self.stream_cfg.buffer_size {
-                            state.current_size = Some(size);
-                            log::warn!("CPAL: increased buffer_size to {}", size);
-                        }
-                    }
-                }
-            }
-            state.consecutive_underruns = 0;
-        }
-
-        let recovery_floor = self
-            .config
-            .preferred_output_buffer_frames
-            .max(Self::MIN_BUFFER_MIN);
-        if let Some(size) = state.current_size
-            && size > recovery_floor
-            && state.clean_seconds >= Self::RECOVERY_SECS_THRESHOLD
-        {
-            let desired = (size / 2).max(recovery_floor);
-            let desired_min = desired;
-            if let Some(buffer_size) = CpalHost::pick_buffer_size(
-                &self.device,
-                self.sample_format,
-                self.stream_cfg.channels,
-                self.stream_cfg.sample_rate.0,
-                desired_min,
-            ) {
-                if let cpal::BufferSize::Fixed(new_size) = buffer_size {
-                    if new_size < size {
-                        self.stream_cfg.buffer_size = buffer_size;
-                        if self.restart_output_stream(stream, state, "latency-recovery") {
-                            state.current_size = Some(new_size);
-                            log::info!("CPAL: reduced buffer_size to {}", new_size);
-                            state.clean_seconds = 0;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn run(mut self, ready_tx: mpsc::Sender<()>) {
-        use cpal::traits::StreamTrait;
-
+    #[cfg(feature = "cpal-backend")]
+    fn launch_session(&mut self, ready_tx: mpsc::Sender<()>) -> Option<cpal::Stream> {
         let mut stream = CpalHost::build_stream(
             &self.device,
             self.sample_format,
@@ -335,6 +54,7 @@ impl AdaptiveMonitor {
             self.runtime.clone(),
             self.synth_sample_rate,
             self.config.channels.max(1),
+            ready_tx.clone(),
         );
         if stream.is_none() && !matches!(self.stream_cfg.buffer_size, cpal::BufferSize::Default) {
             log::warn!("CPAL: retrying with default buffer_size");
@@ -347,51 +67,101 @@ impl AdaptiveMonitor {
                 self.runtime.clone(),
                 self.synth_sample_rate,
                 self.config.channels.max(1),
+                ready_tx,
             );
         }
+        stream
+    }
 
-        let stream = match stream {
-            Some(stream) => stream,
-            None => {
-                log::warn!("Unable to build CPAL output stream");
-                return;
-            }
-        };
-        // Stream start delay disabled while priming gate handles startup.
-        if let Err(err) = stream.play() {
-            log::warn!("Unable to start CPAL output stream: {err}");
-            return;
-        }
-        let _ = ready_tx.send(());
-        CpalHost::update_soft_cap(&self.runtime);
-        CpalHost::log_output_config(
-            &self.stream_cfg,
-            self.sample_format,
-            &self.runtime,
-            self.synth_sample_rate,
-        );
-        let mut stream = Some(stream);
+    fn run(mut self, ready_tx: mpsc::Sender<()>) {
+        use cpal::traits::StreamTrait;
 
-        let mut state = MonitorState {
-            last_underruns: self.runtime.underrun_samples(),
-            consecutive_underruns: 0,
-            clean_seconds: 0,
-            current_size: match self.stream_cfg.buffer_size {
-                cpal::BufferSize::Fixed(size) => Some(size),
-                _ => None,
-            },
-            last_pcm_len: self.runtime.pcm_len(),
-            last_dropped_stale: self.runtime.dropped_stale_events(),
-            was_below_target: false,
-            was_above_soft_cap: false,
-            last_consumed_samples: self.runtime.total_samples_consumed(),
-            no_consume_seconds: 0,
-        };
+        let mut first_session_ready = false;
 
         loop {
-            thread::sleep(Duration::from_secs(1));
-            self.monitor_metrics(&mut state);
-            self.rebalance_stream(&mut stream, &mut state);
+            self.runtime.set_audio_output_enabled(false);
+            self.runtime.clear_pcm_buffer();
+            log::info!("CPAL: starting audio session attempt");
+
+            let (session_ready_tx, session_ready_rx) = mpsc::channel();
+            let stream = match self.launch_session(session_ready_tx) {
+                Some(stream) => stream,
+                None => {
+                    log::info!(
+                        "CPAL: restart attempt deferred while building session; cooling down for {:?}",
+                        Self::RESTART_COOLDOWN
+                    );
+                    thread::sleep(Self::RESTART_COOLDOWN);
+                    continue;
+                }
+            };
+
+            if let Err(err) = stream.play() {
+                log::warn!("Unable to start CPAL output stream: {err}");
+                log::info!(
+                    "CPAL: restart attempt deferred after play() failure; cooling down for {:?}",
+                    Self::RESTART_COOLDOWN
+                );
+                thread::sleep(Self::RESTART_COOLDOWN);
+                continue;
+            }
+
+            log::info!("CPAL: waiting for first callback (timeout {:?})", Self::FIRST_CALLBACK_TIMEOUT);
+            if session_ready_rx.recv_timeout(Self::FIRST_CALLBACK_TIMEOUT).is_err() {
+                log::warn!("CPAL: no callback received within {:?}; restarting session", Self::FIRST_CALLBACK_TIMEOUT);
+                drop(stream);
+                log::info!(
+                    "CPAL: restart attempt deferred after missing first callback; cooling down for {:?}",
+                    Self::RESTART_COOLDOWN
+                );
+                thread::sleep(Self::RESTART_COOLDOWN);
+                continue;
+            }
+
+            self.runtime.set_audio_output_enabled(true);
+            CpalHost::update_soft_cap(&self.runtime);
+            CpalHost::log_output_config(
+                &self.stream_cfg,
+                self.sample_format,
+                &self.runtime,
+                self.synth_sample_rate,
+            );
+            if !first_session_ready {
+                let _ = ready_tx.send(());
+                first_session_ready = true;
+            }
+
+            let mut state = MonitorState {
+                last_callback_epoch: self.runtime.callback_heartbeat_epoch(),
+                no_callback_seconds: 0,
+            };
+
+            loop {
+                thread::sleep(Duration::from_secs(1));
+                let current = self.runtime.callback_heartbeat_epoch();
+                if current == state.last_callback_epoch {
+                    state.no_callback_seconds = state.no_callback_seconds.saturating_add(1);
+                    if state.no_callback_seconds >= Self::NO_CALLBACK_SECS_THRESHOLD {
+                        log::warn!(
+                            "CPAL output callback stopped for {}s; restarting audio session",
+                            state.no_callback_seconds
+                        );
+                        log::info!(
+                            "CPAL: restart attempt deferred after callback stall; cooling down for {:?}",
+                            Self::RESTART_COOLDOWN
+                        );
+                        break;
+                    }
+                } else {
+                    state.last_callback_epoch = current;
+                    state.no_callback_seconds = 0;
+                }
+            }
+
+            self.runtime.set_audio_output_enabled(false);
+            drop(stream);
+            log::info!("CPAL: audio session closed; cooling down for {:?}", Self::RESTART_COOLDOWN);
+            thread::sleep(Self::RESTART_COOLDOWN);
         }
     }
 }
@@ -550,6 +320,7 @@ impl CpalHost {
         runtime: SharedAudioDataPlane,
         synth_sample_rate: u32,
         channels: usize,
+        ready_tx: mpsc::Sender<()>,
     ) -> Option<cpal::Stream> {
         use cpal::SampleFormat;
         use cpal::traits::DeviceTrait;
@@ -563,14 +334,23 @@ impl CpalHost {
             );
         };
         let err_fn = |err| log::warn!("CPAL output stream error: {err}");
+        let callback_runtime = runtime.clone();
+        let first_callback_seen = Arc::new(AtomicBool::new(false));
 
         match sample_format {
             SampleFormat::F32 => {
                 let mut post_processor = AudioPostProcessor::new(runtime, synth_sample_rate);
                 let config = config.clone();
+                let callback_runtime = callback_runtime.clone();
+                let ready_tx = ready_tx.clone();
+                let first_callback_seen = first_callback_seen.clone();
                 match device.build_output_stream(
                     stream_cfg,
                     move |data: &mut [f32], _| {
+                        callback_runtime.note_callback_activity();
+                        if !first_callback_seen.swap(true, Ordering::AcqRel) {
+                            let _ = ready_tx.send(());
+                        }
                         Self::fill_output_f32(data, channels, &mut post_processor, &config);
                     },
                     err_fn,
@@ -587,9 +367,16 @@ impl CpalHost {
                 let mut post_processor = AudioPostProcessor::new(runtime, synth_sample_rate);
                 let config = config.clone();
                 let mut scratch: Vec<f32> = Vec::new();
+                let callback_runtime = callback_runtime.clone();
+                let ready_tx = ready_tx.clone();
+                let first_callback_seen = first_callback_seen.clone();
                 match device.build_output_stream(
                     stream_cfg,
                     move |data: &mut [i16], _| {
+                        callback_runtime.note_callback_activity();
+                        if !first_callback_seen.swap(true, Ordering::AcqRel) {
+                            let _ = ready_tx.send(());
+                        }
                         Self::fill_output_i16(
                             data,
                             channels,
@@ -612,9 +399,16 @@ impl CpalHost {
                 let mut post_processor = AudioPostProcessor::new(runtime, synth_sample_rate);
                 let config = config.clone();
                 let mut scratch: Vec<f32> = Vec::new();
+                let callback_runtime = callback_runtime.clone();
+                let ready_tx = ready_tx.clone();
+                let first_callback_seen = first_callback_seen.clone();
                 match device.build_output_stream(
                     stream_cfg,
                     move |data: &mut [u16], _| {
+                        callback_runtime.note_callback_activity();
+                        if !first_callback_seen.swap(true, Ordering::AcqRel) {
+                            let _ = ready_tx.send(());
+                        }
                         Self::fill_output_u16(
                             data,
                             channels,

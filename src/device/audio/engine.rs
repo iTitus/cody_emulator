@@ -8,7 +8,7 @@ use crate::device::audio::queue::{LockFreePcmRingBuffer, LockFreeQueue};
 use crate::device::audio::AudioConfig;
 use crate::device::audio::synth::{AudioRegister, SidLikeSynth};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -82,10 +82,10 @@ pub struct AudioDataPlane {
     snapshot_update_count: AtomicU64,
     dropped_stale_events: AtomicU64,
     total_samples_produced: AtomicU64,
-    total_samples_consumed: AtomicU64,
+    audio_output_enabled: AtomicBool,
+    callback_heartbeat_epoch: AtomicU64,
     pcm_soft_cap_samples: AtomicU64,
     target_latency_samples: AtomicU64,
-    resync_request_epoch: AtomicU64,
 }
 
 impl AudioDataPlane {
@@ -97,10 +97,10 @@ impl AudioDataPlane {
             snapshot_update_count: AtomicU64::new(0),
             dropped_stale_events: AtomicU64::new(0),
             total_samples_produced: AtomicU64::new(0),
-            total_samples_consumed: AtomicU64::new(0),
+            audio_output_enabled: AtomicBool::new(false),
+            callback_heartbeat_epoch: AtomicU64::new(0),
             pcm_soft_cap_samples: AtomicU64::new(0),
             target_latency_samples: AtomicU64::new(0),
-            resync_request_epoch: AtomicU64::new(0),
         }
     }
 
@@ -116,38 +116,28 @@ impl AudioDataPlane {
     /// Pops up to `wanted` PCM samples into `out`.
     pub fn pop_pcm_samples(&self, wanted: usize, out: &mut Vec<f32>) {
         self.synth_pcm.pop_samples(wanted, out);
-        if !out.is_empty() {
-            self.total_samples_consumed
-                .fetch_add(out.len() as u64, Ordering::Relaxed);
-        }
     }
 
     /// Removes one front PCM sample if available.
     pub fn pop_pcm_front(&self) {
-        let before = self.synth_pcm.len();
         self.synth_pcm.pop_front();
-        if self.synth_pcm.len() < before {
-            self.total_samples_consumed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Removes all queued PCM samples.
+    pub fn clear_pcm_buffer(&self) {
+        while self.synth_pcm.len() > 0 {
+            self.synth_pcm.pop_front();
         }
     }
 
-    /// Drops oldest PCM samples so at most `keep_samples` remain buffered.
-    pub fn trim_pcm_to_samples(&self, keep_samples: usize) -> usize {
-        let mut dropped = 0usize;
-        while self.synth_pcm.len() > keep_samples {
-            let before = self.synth_pcm.len();
-            self.synth_pcm.pop_front();
-            if self.synth_pcm.len() < before {
-                dropped = dropped.saturating_add(1);
-            } else {
-                break;
-            }
-        }
-        if dropped > 0 {
-            self.total_samples_consumed
-                .fetch_add(dropped as u64, Ordering::Relaxed);
-        }
-        dropped
+    /// Records that the host output callback ran.
+    pub fn note_callback_activity(&self) {
+        let _ = self.callback_heartbeat_epoch.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Returns the last observed host callback heartbeat.
+    pub fn callback_heartbeat_epoch(&self) -> u64 {
+        self.callback_heartbeat_epoch.load(Ordering::Relaxed)
     }
 
     /// Returns buffered PCM sample count.
@@ -186,14 +176,19 @@ impl AudioDataPlane {
         self.total_samples_produced.load(Ordering::Relaxed)
     }
 
-    /// Returns total number of PCM samples consumed by the output side since startup.
-    pub fn total_samples_consumed(&self) -> u64 {
-        self.total_samples_consumed.load(Ordering::Relaxed)
-    }
-
     /// Returns total failed reads due to underrun.
     pub fn underrun_samples(&self) -> u64 {
         self.synth_pcm.underrun_samples()
+    }
+
+    /// Enables or disables PCM rendering for the current audio session.
+    pub fn set_audio_output_enabled(&self, enabled: bool) {
+        self.audio_output_enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Returns whether the audio session is currently enabled.
+    pub fn audio_output_enabled(&self) -> bool {
+        self.audio_output_enabled.load(Ordering::Relaxed)
     }
 
     /// Sets a soft cap for PCM buffering; 0 disables the cap hint.
@@ -227,16 +222,6 @@ impl AudioDataPlane {
         self.target_latency_samples.load(Ordering::Relaxed) as usize
     }
 
-    /// Requests the engine to resynchronize its render timeline.
-    pub fn request_engine_resync(&self) {
-        let _ = self.resync_request_epoch.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Returns the current resync request epoch.
-    pub fn resync_request_epoch(&self) -> u64 {
-        self.resync_request_epoch.load(Ordering::Relaxed)
-    }
-
     /// Adds dropped stale event count.
     pub fn add_dropped_stale_events(&self, count: u64) {
         self.dropped_stale_events.fetch_add(count, Ordering::Relaxed);
@@ -267,7 +252,7 @@ pub struct AudioEngine {
     snapshot_dirty_since_capture: bool,
     stats: PcmStats,
     last_cpu_cycle: usize,
-    seen_resync_request_epoch: u64,
+    seen_audio_output_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -285,8 +270,6 @@ impl AudioEngine {
         config: AudioConfig,
     ) -> Self {
         let timing = AudioTiming::new(config);
-        let seen_resync_request_epoch = runtime.resync_request_epoch();
-
         log::info!(
             "Audio engine timing: cpu_hz={:.2}, synth_hz={}, cycles_per_sample={:.3}, target_latency_cycles={:.1} (~{} samples)",
             timing.cpu_hz,
@@ -299,7 +282,7 @@ impl AudioEngine {
         runtime.set_target_latency_samples(timing.target_latency_samples);
 
         let engine = Self {
-            runtime,
+            runtime: runtime.clone(),
             control_queues,
             synth: SidLikeSynth::new(),
             pending_writes: VecDeque::new(),
@@ -321,7 +304,7 @@ impl AudioEngine {
                 debug_log_last: Instant::now(),
             },
             last_cpu_cycle: 0,
-            seen_resync_request_epoch,
+            seen_audio_output_enabled: runtime.audio_output_enabled(),
         };
 
         // Seed a baseline snapshot so underrun fallback has a synth state immediately.
@@ -558,8 +541,7 @@ impl AudioEngine {
         sample_count
     }
 
-    fn apply_pending_writes_until(&mut self, cycle: usize) -> usize {
-        let mut applied = 0usize;
+    fn apply_pending_writes_until(&mut self, cycle: usize) {
         while let Some(event) = self.pending_writes.front().copied() {
             if event.cycle > cycle {
                 break;
@@ -567,70 +549,35 @@ impl AudioEngine {
             let _ = self.pending_writes.pop_front();
             self.synth.write_register(event.register, event.value);
             self.snapshot_dirty_since_capture = true;
-            applied = applied.saturating_add(1);
         }
-        applied
-    }
-
-    fn perform_resync(&mut self, target_cycle: f64) {
-        let target_cycle_usize = target_cycle.max(0.0) as usize;
-        let lag_cycles = target_cycle.max(self.rendered_cpu_cycle) - self.rendered_cpu_cycle;
-        let applied = self.apply_pending_writes_until(target_cycle_usize);
-        self.rendered_cpu_cycle = target_cycle.max(self.rendered_cpu_cycle);
-        self.readback_history.clear();
-        self.runtime.store_snapshot(self.synth.clone());
-        self.snapshot_dirty_since_capture = false;
-        log::warn!(
-            "Audio engine resync: fast-forwarded by {:.1} cycles, applied_writes={}, pending_writes={}",
-            lag_cycles,
-            applied,
-            self.pending_writes.len()
-        );
-    }
-
-    fn maybe_self_heal_lag(&mut self, desired_target_cycle: f64) {
-        let lag_cycles = (desired_target_cycle - self.rendered_cpu_cycle).max(0.0);
-        let cpu_hz = self.cpu_cycles_per_sample * self.synth_sample_rate as f64;
-        // If lag exceeds ~2s of CPU time while output queue is pinned, fast-forward.
-        let lag_threshold_cycles = (cpu_hz * 2.0).max(self.target_latency_cycles * 8.0);
-
-        if lag_cycles < lag_threshold_cycles {
-            return;
-        }
-
-        let target_latency_samples = (self.target_latency_cycles / self.cpu_cycles_per_sample)
-            .ceil() as usize;
-        let mut soft_cap = self.runtime.pcm_soft_cap_samples();
-        if soft_cap == 0 {
-            soft_cap = target_latency_samples.max(1).saturating_mul(2);
-        }
-        let buffered = self.runtime.pcm_len();
-        if buffered.saturating_add(1) < soft_cap {
-            return;
-        }
-
-        let keep_samples = target_latency_samples.max(1);
-        let dropped = self.runtime.trim_pcm_to_samples(keep_samples);
-        if dropped > 0 {
-            log::warn!(
-                "Audio engine lag heal: dropped {} queued samples before self-resync (keeping {})",
-                dropped,
-                keep_samples
-            );
-        }
-        self.perform_resync(desired_target_cycle);
     }
 
     /// Internal render loop that applies due writes and emits samples/readbacks.
     fn advance_to_target_cycle(&mut self, target_cycle: f64) {
-        let desired_target_cycle = target_cycle;
         self.drain_write_events();
-        let resync_epoch = self.runtime.resync_request_epoch();
-        if resync_epoch != self.seen_resync_request_epoch {
-            self.seen_resync_request_epoch = resync_epoch;
-            self.perform_resync(target_cycle);
+        let output_enabled = self.runtime.audio_output_enabled();
+        if output_enabled != self.seen_audio_output_enabled {
+            self.seen_audio_output_enabled = output_enabled;
+            if output_enabled {
+                let target_cycle_usize = target_cycle.max(0.0) as usize;
+                self.apply_pending_writes_until(target_cycle_usize);
+                self.rendered_cpu_cycle = target_cycle.max(self.rendered_cpu_cycle);
+                self.readback_history.clear();
+                self.runtime.store_snapshot(self.synth.clone());
+                self.snapshot_dirty_since_capture = false;
+                log::info!(
+                    "Audio engine session resumed at cycle {:.1}",
+                    self.rendered_cpu_cycle
+                );
+            }
         }
-        self.maybe_self_heal_lag(desired_target_cycle);
+
+        if !output_enabled {
+            self.apply_pending_writes_until(target_cycle.max(0.0) as usize);
+            self.last_cpu_cycle = target_cycle.max(0.0) as usize;
+            return;
+        }
+
         let (target_cycle, log_ready) = self.compute_target_cycle(target_cycle);
 
         // Batch produced samples/readbacks to amortize queue operations.

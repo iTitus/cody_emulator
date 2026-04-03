@@ -308,6 +308,7 @@ fn host_pulls_interleaved_and_applies_gain() {
     let cfg = AudioPostProcessConfig {
         sample_rate_hz: 16_000,
         channels: 2,
+        preferred_output_buffer_frames: 256,
     };
 
     let mut out = vec![0.0; 8];
@@ -337,6 +338,7 @@ fn host_channels_zero_clamps_to_mono() {
     let cfg = AudioPostProcessConfig {
         sample_rate_hz: 16_000,
         channels: 0,
+        preferred_output_buffer_frames: 256,
     };
 
     let mut out = vec![0.0; 3];
@@ -353,6 +355,7 @@ fn host_underrun_holds_last_sample() {
     let cfg = AudioPostProcessConfig {
         sample_rate_hz: 16_000,
         channels: 1,
+        preferred_output_buffer_frames: 256,
     };
 
     let mut out = vec![0.0; 3];
@@ -379,6 +382,7 @@ fn host_underrun_uses_shadow_synth_when_snapshot_available() {
     let cfg = AudioPostProcessConfig {
         sample_rate_hz: 16_000,
         channels: 1,
+        preferred_output_buffer_frames: 256,
     };
 
     // No PCM queued: output should come from shadow synth, not silence.
@@ -403,6 +407,7 @@ fn host_overrun_fast_forwards_old_pcm() {
     let cfg = AudioPostProcessConfig {
         sample_rate_hz: 16_000,
         channels: 1,
+        preferred_output_buffer_frames: 256,
     };
 
     let mut out = vec![0.0; 4];
@@ -434,6 +439,7 @@ fn host_hard_skip_and_snapshot_fallback() {
     let cfg = AudioPostProcessConfig {
         sample_rate_hz: 16_000,
         channels: 1,
+        preferred_output_buffer_frames: 256,
     };
 
     let before = runtime.pcm_len();
@@ -464,6 +470,7 @@ fn host_catchup_skips_when_buffered_over_drift_guard() {
     let cfg = AudioPostProcessConfig {
         sample_rate_hz: 16_000,
         channels: 1,
+        preferred_output_buffer_frames: 256,
     };
 
     std::thread::sleep(Duration::from_millis(200));
@@ -487,6 +494,7 @@ fn host_catchup_idle_below_drift_guard() {
     let cfg = AudioPostProcessConfig {
         sample_rate_hz: 16_000,
         channels: 1,
+        preferred_output_buffer_frames: 256,
     };
 
     std::thread::sleep(Duration::from_millis(200));
@@ -497,6 +505,29 @@ fn host_catchup_idle_below_drift_guard() {
     let after = runtime.pcm_len();
 
     assert_eq!(before.saturating_sub(after), 3);
+}
+
+#[test]
+fn host_catchup_reserves_callback_demand() {
+    let runtime = Arc::new(AudioDataPlane::new(4096));
+    runtime.set_target_latency_samples(128);
+    runtime.set_pcm_soft_cap_samples(1024);
+    runtime.push_pcm_samples(&vec![0.0; 579]);
+
+    let mut host = AudioPostProcessor::new(Arc::clone(&runtime), 16_000);
+    let cfg = AudioPostProcessConfig {
+        sample_rate_hz: 16_000,
+        channels: 1,
+        preferred_output_buffer_frames: 256,
+    };
+
+    // Simulate a delayed first callback so catch-up credit has time to accumulate.
+    std::thread::sleep(Duration::from_millis(1100));
+
+    let mut out = vec![0.0; 1];
+    host.render_interleaved(&mut out, &cfg);
+
+    assert!(runtime.pcm_len() >= 128);
 }
 
 fn build_policy_host(
@@ -545,6 +576,7 @@ fn host_softclip_bounds_output() {
     let cfg = AudioPostProcessConfig {
         sample_rate_hz: 16_000,
         channels: 1,
+        preferred_output_buffer_frames: 256,
     };
 
     let mut out = vec![0.0; 4];
@@ -565,6 +597,7 @@ fn host_lowpass_smooths_impulse() {
     let cfg = AudioPostProcessConfig {
         sample_rate_hz: 16_000,
         channels: 1,
+        preferred_output_buffer_frames: 256,
     };
 
     let mut out = vec![0.0; 4];
@@ -739,6 +772,7 @@ fn payload_postprocessed_pcm_capture_codymelody() {
     let cfg = AudioPostProcessConfig {
         sample_rate_hz: post_rate,
         channels,
+        preferred_output_buffer_frames: 256,
     };
     let target_frames = 144_000usize;
     let mut output: Vec<f32> = Vec::with_capacity(target_frames * channels);

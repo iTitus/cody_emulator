@@ -385,6 +385,7 @@ impl AudioPostProcessor {
         bounds: &BufferBounds,
         catchup_elapsed: Duration,
         one_shot_catchup_active: bool,
+        missing: usize,
     ) -> usize {
         let mut crossfade_len = 0usize;
 
@@ -393,7 +394,14 @@ impl AudioPostProcessor {
                 let excess = bounds
                     .buffered_samples
                     .saturating_sub(bounds.target_buffer_samples);
-                let catchup_secs = 0.5_f64; // More aggressive catchup
+                // Leave enough headroom for samples this callback is about to consume,
+                // otherwise catch-up can dip below target and rebound.
+                let min_buffer_after_skip = bounds.target_buffer_samples.saturating_add(missing);
+                let max_removable = bounds
+                    .buffered_samples
+                    .saturating_sub(min_buffer_after_skip);
+
+                let catchup_secs = 1.25_f64;
                 let rate = excess as f64 / catchup_secs;
                 self.stats.catchup_credit += rate * catchup_elapsed.as_secs_f64();
                 let mut max_skip = bounds.frame_samples.saturating_div(4).max(8);
@@ -406,6 +414,9 @@ impl AudioPostProcessor {
                 }
                 if to_skip > excess {
                     to_skip = excess;
+                }
+                if to_skip > max_removable {
+                    to_skip = max_removable;
                 }
                 if to_skip > 0 {
                     let planned_fade = to_skip.min(bounds.max_crossfade_samples);
@@ -476,6 +487,7 @@ impl AudioPostProcessor {
             &policy.bounds,
             catchup_elapsed,
             policy.one_shot_catchup_active,
+            missing,
         );
         self.buffer_state = policy.next_state;
         crossfade_len
