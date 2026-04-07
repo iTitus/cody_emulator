@@ -4,10 +4,40 @@
 //! counters so real-time audio paths can degrade gracefully.
 
 use crossbeam_queue::ArrayQueue;
-use std::collections::VecDeque;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+pub trait EventQueue<T>: Send + Sync {
+    fn capacity(&self) -> usize;
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool;
+    fn push_drop_oldest(&self, value: T);
+    fn pop_front(&self) -> Option<T>;
+    fn drain_into(&self, out: &mut Vec<T>);
+    fn overrun_count(&self) -> u64;
+}
+
+pub trait PcmBuffer: Send + Sync {
+    fn len(&self) -> usize;
+    fn capacity(&self) -> usize;
+    fn push_samples(&self, samples: &[f32]);
+    fn pop_samples(&self, wanted: usize, out: &mut Vec<f32>);
+    fn pop_front(&self);
+    fn overrun_samples(&self) -> u64;
+    fn underrun_samples(&self) -> u64;
+}
+
+pub type EventQueueHandle<T> = Arc<dyn EventQueue<T>>;
+pub type PcmBufferHandle = Arc<dyn PcmBuffer>;
+
+pub fn new_event_queue<T: Send + Sync + 'static>(capacity: usize) -> EventQueueHandle<T> {
+    Arc::new(LockFreeQueue::with_capacity(capacity))
+}
+
+pub fn new_pcm_buffer(capacity: usize) -> PcmBufferHandle {
+    Arc::new(LockFreePcmRingBuffer::with_capacity(capacity))
+}
 
 /// A bounded lock-free queue that drops the oldest item on overflow.
 #[derive(Clone)]
@@ -75,6 +105,36 @@ impl<T> LockFreeQueue<T> {
     /// Returns how many items were dropped due to queue overflow.
     pub fn overrun_count(&self) -> u64 {
         self.overrun_count.load(Ordering::Relaxed)
+    }
+}
+
+impl<T: Send + Sync> EventQueue<T> for LockFreeQueue<T> {
+    fn capacity(&self) -> usize {
+        LockFreeQueue::capacity(self)
+    }
+
+    fn len(&self) -> usize {
+        LockFreeQueue::len(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        LockFreeQueue::is_empty(self)
+    }
+
+    fn push_drop_oldest(&self, value: T) {
+        LockFreeQueue::push_drop_oldest(self, value);
+    }
+
+    fn pop_front(&self) -> Option<T> {
+        LockFreeQueue::pop_front(self)
+    }
+
+    fn drain_into(&self, out: &mut Vec<T>) {
+        LockFreeQueue::drain_into(self, out);
+    }
+
+    fn overrun_count(&self) -> u64 {
+        LockFreeQueue::overrun_count(self)
     }
 }
 
@@ -158,137 +218,34 @@ impl LockFreePcmRingBuffer {
     }
 }
 
-/// A fixed-capacity FIFO queue that drops the oldest item on overflow.
-#[derive(Debug, Clone)]
-pub struct BoundedQueue<T> {
-    data: VecDeque<T>,
-    capacity: usize,
-    overrun_count: u64,
-}
-
-impl<T> BoundedQueue<T> {
-    /// Creates a new queue with the provided maximum item capacity.
-    pub fn with_capacity(capacity: usize) -> Self {
-        assert!(capacity > 0, "capacity must be > 0");
-        Self {
-            data: VecDeque::with_capacity(capacity),
-            capacity,
-            overrun_count: 0,
-        }
+impl PcmBuffer for LockFreePcmRingBuffer {
+    fn len(&self) -> usize {
+        LockFreePcmRingBuffer::len(self)
     }
 
-    pub const fn capacity(&self) -> usize {
-        self.capacity
+    fn capacity(&self) -> usize {
+        LockFreePcmRingBuffer::capacity(self)
     }
 
-    pub fn len(&self) -> usize {
-        self.data.len()
+    fn push_samples(&self, samples: &[f32]) {
+        LockFreePcmRingBuffer::push_samples(self, samples);
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+    fn pop_samples(&self, wanted: usize, out: &mut Vec<f32>) {
+        LockFreePcmRingBuffer::pop_samples(self, wanted, out);
     }
 
-    pub fn front(&self) -> Option<&T> {
-        self.data.front()
+    fn pop_front(&self) {
+        LockFreePcmRingBuffer::pop_front(self);
     }
 
-    pub fn pop_front(&mut self) -> Option<T> {
-        self.data.pop_front()
+    fn overrun_samples(&self) -> u64 {
+        LockFreePcmRingBuffer::overrun_samples(self)
     }
 
-    /// Pushes an item, dropping the oldest queued item when full.
-    pub fn push_drop_oldest(&mut self, value: T) {
-        if self.data.len() >= self.capacity {
-            let _ = self.data.pop_front();
-            self.overrun_count = self.overrun_count.saturating_add(1);
-        }
-        self.data.push_back(value);
-    }
-
-    /// Drains all items in FIFO order into a new vector.
-    pub fn drain(&mut self) -> Vec<T> {
-        self.data.drain(..).collect()
-    }
-
-    /// Returns how many items were dropped due to queue overflow.
-    pub const fn overrun_count(&self) -> u64 {
-        self.overrun_count
+    fn underrun_samples(&self) -> u64 {
+        LockFreePcmRingBuffer::underrun_samples(self)
     }
 }
 
-/// A fixed-capacity PCM sample buffer with overrun/underrun accounting.
-#[derive(Debug, Clone)]
-pub struct PcmRingBuffer {
-    data: VecDeque<f32>,
-    capacity: usize,
-    overrun_samples: u64,
-    underrun_samples: u64,
-}
 
-impl PcmRingBuffer {
-    /// Creates a sample buffer with the provided maximum sample capacity.
-    pub fn with_capacity(capacity: usize) -> Self {
-        assert!(capacity > 0, "capacity must be > 0");
-        Self {
-            data: VecDeque::with_capacity(capacity),
-            capacity,
-            overrun_samples: 0,
-            underrun_samples: 0,
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.data.len()
-    }
-
-    pub const fn capacity(&self) -> usize {
-        self.capacity
-    }
-
-    /// Appends samples, discarding oldest samples if capacity is exceeded.
-    pub fn push_samples(&mut self, samples: &[f32]) {
-        for &sample in samples {
-            if self.data.len() >= self.capacity {
-                let _ = self.data.pop_front();
-                self.overrun_samples = self.overrun_samples.saturating_add(1);
-            }
-            self.data.push_back(sample);
-        }
-    }
-
-    /// Pops up to `wanted` samples into `out` and records underruns when empty.
-    pub fn pop_samples(&mut self, wanted: usize, out: &mut Vec<f32>) {
-        out.clear();
-        out.reserve(wanted);
-
-        for _ in 0..wanted {
-            if let Some(sample) = self.data.pop_front() {
-                out.push(sample);
-            } else {
-                self.underrun_samples = self.underrun_samples.saturating_add(1);
-                break;
-            }
-        }
-    }
-
-    /// Returns a copied sample at `index` without consuming it.
-    pub fn peek(&self, index: usize) -> Option<f32> {
-        self.data.get(index).copied()
-    }
-
-    /// Removes one sample from the front if available.
-    pub fn pop_front(&mut self) {
-        let _ = self.data.pop_front();
-    }
-
-    /// Returns how many samples were dropped due to overflow.
-    pub const fn overrun_samples(&self) -> u64 {
-        self.overrun_samples
-    }
-
-    /// Returns how many sample reads encountered underrun.
-    pub const fn underrun_samples(&self) -> u64 {
-        self.underrun_samples
-    }
-}

@@ -183,9 +183,9 @@ pub fn start(
     );
     memory.add_memory(UART2_BASE, UART_END, uart2);
 
-    let (audio, audio_post_processor) = create_audio_pipeline();
-    let audio = Rc::new(RefCell::new(audio));
-    let mut audio_host = CpalHost::new(audio_post_processor, AudioPostProcessConfig::default());
+    let pipeline = create_audio_pipeline();
+    let audio = Rc::new(RefCell::new(pipeline.mmio));
+    let mut audio_host = CpalHost::new(pipeline.post, AudioPostProcessConfig::default());
     if !audio_host.wait_ready(Duration::from_secs(3)) {
         info!("Audio output not ready yet; continuing startup");
     }

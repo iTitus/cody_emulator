@@ -4,18 +4,20 @@
 //! PCM in sample steps, and resolves MMIO readback requests against historical
 //! snapshots.
 
-use crate::device::audio::queue::{LockFreePcmRingBuffer, LockFreeQueue};
+use crate::device::audio::queue::{EventQueueHandle, PcmBufferHandle, new_event_queue, new_pcm_buffer};
 use crate::device::audio::AudioConfig;
+use crate::device::audio::compute_soft_cap_samples;
 use crate::device::audio::registers::AudioRegister;
 use crate::device::audio::synth::SidLikeSynth;
 use std::collections::VecDeque;
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct AudioTiming {
+pub struct AudioTiming {
     pub cpu_hz: f64,
     pub synth_sample_rate: u32,
     pub target_latency_cycles: f64,
@@ -24,6 +26,7 @@ pub(crate) struct AudioTiming {
 }
 
 impl AudioTiming {
+    /// Derives timing ratios and latency targets from the runtime config.
     pub fn new(config: AudioConfig) -> Self {
         let synth_sample_rate = config.synth_sample_rate.max(1);
         let cpu_hz = config.cpu_hz.max(1.0);
@@ -57,17 +60,198 @@ pub struct ReadbackPoint {
     pub env3: u8,
 }
 
-/// Lock-free control queues connecting MMIO requests and engine responses.
+/// Readback inputs borrowed from the current engine state.
+struct ReadbackContext<'a> {
+    synth: &'a SidLikeSynth,
+    pending_writes: &'a VecDeque<AudioEvent>,
+    rendered_cpu_cycle: f64,
+    cpu_cycles_per_sample: f64,
+    synth_sample_rate: u32,
+}
+
+impl<'a> ReadbackContext<'a> {
+    /// Returns the CPU cycle corresponding to the last rendered sample.
+    fn last_sample_cycle(&self) -> usize {
+        if self.rendered_cpu_cycle <= 0.0 {
+            return 0;
+        }
+        let last_cycle = (self.rendered_cpu_cycle - self.cpu_cycles_per_sample).max(0.0);
+        last_cycle as usize
+    }
+}
+
+/// Readback history and scratch replay state used by the engine.
 #[derive(Debug, Clone)]
+struct ReadbackResolver {
+    history: VecDeque<ReadbackPoint>,
+    produced: Vec<ReadbackPoint>,
+    scratch_events: Vec<AudioEvent>,
+    history_horizon_cycles: usize,
+}
+
+impl ReadbackResolver {
+    /// Creates a readback resolver with a history horizon in CPU cycles.
+    fn new(history_horizon_cycles: usize) -> Self {
+        Self {
+            history: VecDeque::new(),
+            produced: Vec::new(),
+            scratch_events: Vec::new(),
+            history_horizon_cycles,
+        }
+    }
+
+    /// Updates the maximum history age in CPU cycles.
+    fn set_history_horizon(&mut self, history_horizon_cycles: usize) {
+        self.history_horizon_cycles = history_horizon_cycles;
+    }
+
+    /// Clears any pending readbacks from the current render batch.
+    fn clear_batch(&mut self) {
+        self.produced.clear();
+    }
+
+    /// Reserves space for the next batch of readback points.
+    fn reserve_batch(&mut self, count: usize) {
+        self.produced.reserve(count);
+    }
+
+    /// Captures a readback point from the synth at a given CPU cycle.
+    fn push_readback(&mut self, cycle: usize, synth: &SidLikeSynth) {
+        self.produced.push(ReadbackPoint {
+            cycle,
+            osc3: synth.osc3_readback(),
+            env3: synth.env3_readback(),
+        });
+    }
+
+    /// Flushes the current batch into history and prunes old entries.
+    fn flush(&mut self, rendered_cpu_cycle: f64) {
+        let rendered_cycle = rendered_cpu_cycle as usize;
+        let history_min_cycle = rendered_cycle.saturating_sub(self.history_horizon_cycles);
+
+        for point in self.produced.drain(..) {
+            self.history.push_back(point);
+        }
+
+        while self
+            .history
+            .front()
+            .is_some_and(|p| p.cycle < history_min_cycle)
+        {
+            let _ = self.history.pop_front();
+        }
+    }
+
+    /// Resolves readbacks using history or a scratch replay of writes.
+    fn resolve_readback_value(
+        &mut self,
+        cycle: usize,
+        register: u8,
+        max_cycle: usize,
+        ctx: ReadbackContext<'_>,
+    ) -> u8 {
+        let target_cycle = cycle.min(max_cycle);
+        let last_sample_cycle = ctx.last_sample_cycle();
+        if ctx.rendered_cpu_cycle == 0.0 && !ctx.pending_writes.is_empty() {
+            return self.readback_from_scratch(target_cycle, register, ctx);
+        }
+        if target_cycle <= last_sample_cycle {
+            return self
+                .readback_for_cycle(target_cycle, register)
+                .unwrap_or_else(|| Self::readback_from_synth(ctx.synth, register));
+        }
+
+        self.readback_from_scratch(target_cycle, register, ctx)
+    }
+
+    /// Returns the last known readback at or before the given cycle.
+    fn readback_for_cycle(&self, cycle: usize, register: u8) -> Option<u8> {
+        for point in self.history.iter().rev() {
+            if point.cycle <= cycle {
+                return Some(match register {
+                    r if r == AudioRegister::Osc3Read.as_u8() => point.osc3,
+                    r if r == AudioRegister::Env3Read.as_u8() => point.env3,
+                    _ => 0,
+                });
+            }
+        }
+        None
+    }
+
+    /// Replays writes on a scratch synth to resolve readbacks without output.
+    fn readback_from_scratch(
+        &mut self,
+        target_cycle: usize,
+        register: u8,
+        ctx: ReadbackContext<'_>,
+    ) -> u8 {
+        let last_sample_cycle = ctx.last_sample_cycle();
+        let mut scratch = ctx.synth.clone();
+        let mut scratch_cycle = ctx.rendered_cpu_cycle;
+
+        let min_cycle = if ctx.rendered_cpu_cycle == 0.0 {
+            0
+        } else {
+            last_sample_cycle.saturating_add(1)
+        };
+
+        self.scratch_events.clear();
+        self.scratch_events.extend(
+            ctx.pending_writes
+                .iter()
+                .copied()
+                .filter(|event| event.cycle >= min_cycle && event.cycle <= target_cycle),
+        );
+        self.scratch_events.sort_by_key(|event| event.cycle);
+        let events = &self.scratch_events;
+
+        let mut idx = 0usize;
+        let target_cycle_f = target_cycle as f64;
+        while scratch_cycle + ctx.cpu_cycles_per_sample <= target_cycle_f {
+            let sample_cycle = scratch_cycle as usize;
+            while idx < events.len() && events[idx].cycle <= sample_cycle {
+                let event = events[idx];
+                scratch.write_register(event.register, event.value);
+                idx += 1;
+            }
+            let _ = scratch.render_sample(ctx.synth_sample_rate);
+            scratch_cycle += ctx.cpu_cycles_per_sample;
+        }
+
+        Self::readback_from_synth(&scratch, register)
+    }
+
+    /// Reads osc/env readbacks or raw register values from a synth.
+    fn readback_from_synth(synth: &SidLikeSynth, register: u8) -> u8 {
+        match register {
+            r if r == AudioRegister::Osc3Read.as_u8() => synth.osc3_readback(),
+            r if r == AudioRegister::Env3Read.as_u8() => synth.env3_readback(),
+            _ => synth.read_register(register),
+        }
+    }
+}
+
+/// Lock-free control queues connecting MMIO requests and engine responses.
+#[derive(Clone)]
 pub struct AudioControlPlane {
-    pub write_events: LockFreeQueue<AudioEvent>,
+    pub write_events: EventQueueHandle<AudioEvent>,
+}
+
+impl fmt::Debug for AudioControlPlane {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AudioControlPlane")
+            .field("write_events_len", &self.write_events.len())
+            .field("write_events_capacity", &self.write_events.capacity())
+            .field("write_events_overruns", &self.write_events.overrun_count())
+            .finish()
+    }
 }
 
 impl AudioControlPlane {
     /// Creates queue set with explicit write and read queue capacities.
     pub fn new(write_queue_capacity: usize) -> Self {
         Self {
-            write_events: LockFreeQueue::with_capacity(write_queue_capacity),
+            write_events: new_event_queue(write_queue_capacity),
         }
     }
 }
@@ -76,34 +260,61 @@ impl AudioControlPlane {
 pub type SharedAudioControlPlane = Arc<AudioControlPlane>;
 
 /// Shared runtime state exchanged between MMIO, engine, and postprocessor.
-#[derive(Debug)]
 pub struct AudioDataPlane {
-    synth_pcm: LockFreePcmRingBuffer,
+    pcm: PcmBufferHandle,
     snapshot_synth_state: RwLock<Option<SidLikeSynth>>,
     snapshot_update_count: AtomicU64,
     dropped_stale_events: AtomicU64,
     total_samples_produced: AtomicU64,
     pcm_soft_cap_samples: AtomicU64,
     target_latency_samples: AtomicU64,
+    stats: Mutex<AudioStats>,
+}
+
+impl fmt::Debug for AudioDataPlane {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AudioDataPlane")
+            .field("pcm_len", &self.pcm.len())
+            .field("pcm_capacity", &self.pcm.capacity())
+            .field("snapshot_update_count", &self.snapshot_update_count())
+            .field("dropped_stale_events", &self.dropped_stale_events())
+            .field("total_samples_produced", &self.total_samples_produced())
+            .field("pcm_soft_cap_samples", &self.pcm_soft_cap_samples())
+            .field("target_latency_samples", &self.target_latency_samples())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AudioStats {
+    last_engine_stats: Instant,
+    last_engine_debug: Instant,
+    last_postprocess: Instant,
 }
 
 impl AudioDataPlane {
     /// Creates shared data-plane storage for stream and snapshot state.
     pub fn new(pcm_capacity: usize) -> Self {
+        let now = Instant::now();
         Self {
-            synth_pcm: LockFreePcmRingBuffer::with_capacity(pcm_capacity),
+            pcm: new_pcm_buffer(pcm_capacity),
             snapshot_synth_state: RwLock::new(None),
             snapshot_update_count: AtomicU64::new(0),
             dropped_stale_events: AtomicU64::new(0),
             total_samples_produced: AtomicU64::new(0),
             pcm_soft_cap_samples: AtomicU64::new(0),
             target_latency_samples: AtomicU64::new(0),
+            stats: Mutex::new(AudioStats {
+                last_engine_stats: now,
+                last_engine_debug: now,
+                last_postprocess: now,
+            }),
         }
     }
 
     /// Appends synthesized PCM samples into the shared stream buffer.
     pub fn push_pcm_samples(&self, samples: &[f32]) {
-        self.synth_pcm.push_samples(samples);
+        self.pcm.push_samples(samples);
         if !samples.is_empty() {
             self.total_samples_produced
                 .fetch_add(samples.len() as u64, Ordering::Relaxed);
@@ -112,22 +323,22 @@ impl AudioDataPlane {
 
     /// Pops up to `wanted` PCM samples into `out`.
     pub fn pop_pcm_samples(&self, wanted: usize, out: &mut Vec<f32>) {
-        self.synth_pcm.pop_samples(wanted, out);
+        self.pcm.pop_samples(wanted, out);
     }
 
     /// Removes one front PCM sample if available.
     pub fn pop_pcm_front(&self) {
-        self.synth_pcm.pop_front();
+        self.pcm.pop_front();
     }
 
     /// Returns buffered PCM sample count.
     pub fn pcm_len(&self) -> usize {
-        self.synth_pcm.len()
+        self.pcm.len()
     }
 
     /// Returns PCM staging buffer capacity in samples.
     pub fn pcm_capacity_samples(&self) -> usize {
-        self.synth_pcm.capacity()
+        self.pcm.capacity()
     }
 
     /// Returns a cloned synth snapshot for underrun fallback if available.
@@ -158,7 +369,7 @@ impl AudioDataPlane {
 
     /// Returns total failed reads due to underrun.
     pub fn underrun_samples(&self) -> u64 {
-        self.synth_pcm.underrun_samples()
+        self.pcm.underrun_samples()
     }
 
     /// Sets a soft cap for PCM buffering; 0 disables the cap hint.
@@ -187,6 +398,57 @@ impl AudioDataPlane {
             .store(samples as u64, Ordering::Relaxed);
     }
 
+    /// Configures buffering targets and soft-cap based on target latency.
+    pub fn configure_buffering(&self, target_latency_samples: usize) {
+        self.set_target_latency_samples(target_latency_samples);
+        let staging_capacity = self.pcm_capacity_samples();
+        if target_latency_samples < 128 {
+            log::error!(
+                "Audio config invalid: target_latency={} samples below minimum 128",
+                target_latency_samples
+            );
+        }
+        if staging_capacity < target_latency_samples.saturating_mul(2) {
+            log::error!(
+                "Audio config invalid: staging_capacity={} samples < target_latency*2 ({} samples)",
+                staging_capacity,
+                target_latency_samples.saturating_mul(2)
+            );
+        }
+        if target_latency_samples > staging_capacity / 2 {
+            log::error!(
+                "Audio config invalid: target_latency={} samples exceeds staging_capacity/2 ({} samples)",
+                target_latency_samples,
+                staging_capacity / 2
+            );
+        }
+        if staging_capacity <= target_latency_samples {
+            log::error!(
+                "Audio config invalid: staging_capacity={} samples <= target_latency={} samples",
+                staging_capacity,
+                target_latency_samples
+            );
+        }
+        let soft_cap = compute_soft_cap_samples(target_latency_samples, staging_capacity);
+        let min_cap = target_latency_samples.saturating_mul(2);
+        let max_cap = staging_capacity.saturating_sub(target_latency_samples);
+        if soft_cap < min_cap || soft_cap > max_cap {
+            log::error!(
+                "Audio config invalid: soft_cap={} samples not in [{}, {}]",
+                soft_cap,
+                min_cap,
+                max_cap
+            );
+        }
+        self.set_pcm_soft_cap_samples(soft_cap);
+        log::info!(
+            "Audio buffer policy: soft_cap={} samples (target_latency={}, staging_capacity={})",
+            soft_cap,
+            target_latency_samples,
+            staging_capacity
+        );
+    }
+
     /// Returns the target latency in synth samples, or 0 if unset.
     pub fn target_latency_samples(&self) -> usize {
         self.target_latency_samples.load(Ordering::Relaxed) as usize
@@ -195,6 +457,40 @@ impl AudioDataPlane {
     /// Adds dropped stale event count.
     pub fn add_dropped_stale_events(&self, count: u64) {
         self.dropped_stale_events.fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// Returns elapsed time since last engine stats log if the interval passed.
+    pub fn engine_stats_elapsed(&self, interval: Duration) -> Option<Duration> {
+        let mut stats = self.stats.lock().unwrap();
+        let elapsed = stats.last_engine_stats.elapsed();
+        if elapsed >= interval {
+            stats.last_engine_stats = Instant::now();
+            Some(elapsed)
+        } else {
+            None
+        }
+    }
+
+    /// Returns true when engine debug logs should be emitted.
+    pub fn should_log_engine_debug(&self, interval: Duration) -> bool {
+        let mut stats = self.stats.lock().unwrap();
+        if stats.last_engine_debug.elapsed() >= interval {
+            stats.last_engine_debug = Instant::now();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns true when postprocess logs should be emitted.
+    pub fn should_log_postprocess(&self, interval: Duration) -> bool {
+        let mut stats = self.stats.lock().unwrap();
+        if stats.last_postprocess.elapsed() >= interval {
+            stats.last_postprocess = Instant::now();
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -208,11 +504,9 @@ pub struct AudioEngine {
     control_queues: SharedAudioControlPlane,
     synth: SidLikeSynth,
     pending_writes: VecDeque<AudioEvent>,
-    scratch_events: Vec<AudioEvent>,
-    readback_history: VecDeque<ReadbackPoint>,
+    readbacks: ReadbackResolver,
     drained_write_events: Vec<AudioEvent>,
     produced_samples: Vec<f32>,
-    produced_readbacks: Vec<ReadbackPoint>,
     synth_sample_rate: u32,
     cpu_cycles_per_sample: f64,
     rendered_cpu_cycle: f64,
@@ -226,9 +520,7 @@ pub struct AudioEngine {
 
 #[derive(Debug, Clone)]
 struct PcmStats {
-    stats_last: Instant,
     stats_samples: u64,
-    debug_log_last: Instant,
 }
 
 impl AudioEngine {
@@ -239,6 +531,7 @@ impl AudioEngine {
         config: AudioConfig,
     ) -> Self {
         let timing = AudioTiming::new(config);
+        let history_horizon_cycles = (timing.cpu_hz as usize).max(8192);
 
         log::info!(
             "Audio engine timing: cpu_hz={:.2}, synth_hz={}, cycles_per_sample={:.3}, target_latency_cycles={:.1} (~{} samples)",
@@ -256,22 +549,18 @@ impl AudioEngine {
             control_queues,
             synth: SidLikeSynth::new(),
             pending_writes: VecDeque::new(),
-            scratch_events: Vec::new(),
-            readback_history: VecDeque::new(),
+            readbacks: ReadbackResolver::new(history_horizon_cycles),
             drained_write_events: Vec::new(),
             produced_samples: Vec::new(),
-            produced_readbacks: Vec::new(),
             synth_sample_rate: timing.synth_sample_rate,
             cpu_cycles_per_sample: timing.cpu_cycles_per_sample,
             rendered_cpu_cycle: 0.0,
             target_latency_cycles: timing.target_latency_cycles.max(0.0),
-            history_horizon_cycles: (timing.cpu_hz as usize).max(8192),
+            history_horizon_cycles,
             max_pending_writes: 8192,
             snapshot_dirty_since_capture: false,
             stats: PcmStats {
-                stats_last: Instant::now(),
                 stats_samples: 0,
-                debug_log_last: Instant::now(),
             },
             last_cpu_cycle: 0,
         };
@@ -299,6 +588,7 @@ impl AudioEngine {
         let target_latency_samples = self.runtime.target_latency_samples().max(1);
         self.target_latency_cycles = target_latency_samples as f64 * self.cpu_cycles_per_sample;
         self.history_horizon_cycles = (new_cpu_hz as usize).max(8192);
+        self.readbacks.set_history_horizon(self.history_horizon_cycles);
 
         log::trace!(
             "Audio engine retuned: cpu_hz={:.2}, cycles_per_sample={:.3}, target_latency_cycles={:.1} (~{} samples)",
@@ -316,93 +606,21 @@ impl AudioEngine {
         self.advance_to_target_cycle(target_cycle);
     }
 
-    /// Returns the latest readback snapshot at or before `cycle`.
-    fn readback_for_cycle(&self, cycle: usize, register: u8) -> Option<u8> {
-        for point in self.readback_history.iter().rev() {
-            if point.cycle <= cycle {
-                return Some(match register {
-                    r if r == AudioRegister::Osc3Read.as_u8() => point.osc3,
-                    r if r == AudioRegister::Env3Read.as_u8() => point.env3,
-                    _ => 0,
-                });
-            }
-        }
-        None
-    }
-
     /// Resolves a readback without advancing the main audio timeline.
     pub fn resolve_readback_value(&mut self, cycle: usize, register: u8, max_cycle: usize) -> u8 {
-        let target_cycle = cycle.min(max_cycle);
         self.drain_write_events();
-
-        let last_sample_cycle = self.last_sample_cycle();
-        if self.rendered_cpu_cycle == 0.0 && !self.pending_writes.is_empty() {
-            return self.readback_from_scratch(target_cycle, register);
-        }
-        if target_cycle <= last_sample_cycle {
-            return self
-                .readback_for_cycle(target_cycle, register)
-                .unwrap_or_else(|| Self::readback_from_synth(&self.synth, register));
-        }
-
-        self.readback_from_scratch(target_cycle, register)
-    }
-
-    // Replays writes and renders synth state forward *on a scrap copy* from the last sample to resolve readback.
-    // Does not modify main synth state or timeline, allowing readback resolution without affecting output timing.
-    fn readback_from_scratch(&mut self, target_cycle: usize, register: u8) -> u8 {
-        let last_sample_cycle = self.last_sample_cycle();
-        let mut scratch = self.synth.clone();
-        let mut scratch_cycle = self.rendered_cpu_cycle;
-
-        let min_cycle = if self.rendered_cpu_cycle == 0.0 {
-            0
-        } else {
-            last_sample_cycle.saturating_add(1)
+        let ctx = ReadbackContext {
+            synth: &self.synth,
+            pending_writes: &self.pending_writes,
+            rendered_cpu_cycle: self.rendered_cpu_cycle,
+            cpu_cycles_per_sample: self.cpu_cycles_per_sample,
+            synth_sample_rate: self.synth_sample_rate,
         };
-
-        self.scratch_events.clear();
-        self.scratch_events.extend(
-            self.pending_writes
-                .iter()
-                .copied()
-                .filter(|event| event.cycle >= min_cycle && event.cycle <= target_cycle),
-        );
-        self.scratch_events.sort_by_key(|event| event.cycle);
-        let events = &self.scratch_events;
-
-        let mut idx = 0usize;
-        let target_cycle_f = target_cycle as f64;
-        while scratch_cycle + self.cpu_cycles_per_sample <= target_cycle_f {
-            let sample_cycle = scratch_cycle as usize;
-            while idx < events.len() && events[idx].cycle <= sample_cycle {
-                let event = events[idx];
-                scratch.write_register(event.register, event.value);
-                idx += 1;
-            }
-            let _ = scratch.render_sample(self.synth_sample_rate);
-            scratch_cycle += self.cpu_cycles_per_sample;
-        }
-
-        Self::readback_from_synth(&scratch, register)
+        self.readbacks
+            .resolve_readback_value(cycle, register, max_cycle, ctx)
     }
 
-    fn readback_from_synth(synth: &SidLikeSynth, register: u8) -> u8 {
-        match register {
-            r if r == AudioRegister::Osc3Read.as_u8() => synth.osc3_readback(),
-            r if r == AudioRegister::Env3Read.as_u8() => synth.env3_readback(),
-            _ => synth.read_register(register),
-        }
-    }
-
-    fn last_sample_cycle(&self) -> usize {
-        if self.rendered_cpu_cycle <= 0.0 {
-            return 0;
-        }
-        let last_cycle = (self.rendered_cpu_cycle - self.cpu_cycles_per_sample).max(0.0);
-        last_cycle as usize
-    }
-
+    /// Drains pending write events into the local queue in FIFO order.
     fn drain_write_events(&mut self) {
         self.control_queues
             .write_events
@@ -418,15 +636,14 @@ impl AudioEngine {
         }
     }
 
+    /// Returns true if a debug log should be emitted this tick.
     fn should_log_debug(&mut self, now: Instant) -> bool {
-        if now.saturating_duration_since(self.stats.debug_log_last) >= Duration::from_secs(1) {
-            self.stats.debug_log_last = now;
-            true
-        } else {
-            false
-        }
+        let _ = now;
+        self.runtime
+            .should_log_engine_debug(Duration::from_secs(1))
     }
 
+    /// Clamps the target cycle based on PCM buffering headroom.
     fn compute_target_cycle(&mut self, desired_target_cycle: f64) -> (f64, bool) {
         // Apply backpressure based on the soft cap so we don't overfill the shared PCM ring.
         let target_latency_samples = (self.target_latency_cycles / self.cpu_cycles_per_sample)
@@ -469,6 +686,7 @@ impl AudioEngine {
         (clamped, log_ready)
     }
 
+    /// Applies any queued writes scheduled before the current sample cycle.
     fn apply_pending_writes(&mut self, sample_cycle: usize) {
         while let Some(event) = self.pending_writes.front().copied() {
             if event.cycle > sample_cycle {
@@ -480,23 +698,7 @@ impl AudioEngine {
         }
     }
 
-    fn record_readbacks(&mut self) {
-        let rendered_cycle = self.rendered_cpu_cycle as usize;
-        let history_min_cycle = rendered_cycle.saturating_sub(self.history_horizon_cycles);
-
-        for point in self.produced_readbacks.drain(..) {
-            self.readback_history.push_back(point);
-        }
-
-        while self
-            .readback_history
-            .front()
-            .is_some_and(|p| p.cycle < history_min_cycle)
-        {
-            let _ = self.readback_history.pop_front();
-        }
-    }
-
+    /// Drops stale pending writes that fall outside the history horizon.
     fn drop_stale_writes(&mut self) -> u64 {
         let rendered_cycle = self.rendered_cpu_cycle as usize;
         let history_min_cycle = rendered_cycle.saturating_sub(self.history_horizon_cycles);
@@ -516,6 +718,7 @@ impl AudioEngine {
         dropped_stale
     }
 
+    /// Pushes produced samples into the shared PCM buffer and updates snapshot.
     fn flush_produced_samples(&mut self) -> usize {
         let sample_count = self.produced_samples.len();
         if sample_count == 0 {
@@ -540,7 +743,7 @@ impl AudioEngine {
 
         // Batch produced samples/readbacks to amortize queue operations.
         self.produced_samples.clear();
-        self.produced_readbacks.clear();
+        self.readbacks.clear_batch();
 
         let remaining_cycles = (target_cycle - self.rendered_cpu_cycle).max(0.0);
         let estimated_steps = (remaining_cycles / self.cpu_cycles_per_sample).ceil() as usize;
@@ -552,7 +755,7 @@ impl AudioEngine {
             );
         }
         self.produced_samples.reserve(estimated_steps);
-        self.produced_readbacks.reserve(estimated_steps);
+        self.readbacks.reserve_batch(estimated_steps);
 
         while self.rendered_cpu_cycle + self.cpu_cycles_per_sample <= target_cycle {
             let sample_cycle = self.rendered_cpu_cycle as usize;
@@ -561,11 +764,7 @@ impl AudioEngine {
             let sample = self.synth.render_sample(self.synth_sample_rate);
             self.produced_samples.push(sample);
 
-            self.produced_readbacks.push(ReadbackPoint {
-                cycle: sample_cycle,
-                osc3: self.synth.osc3_readback(),
-                env3: self.synth.env3_readback(),
-            });
+            self.readbacks.push_readback(sample_cycle, &self.synth);
 
             self.rendered_cpu_cycle += self.cpu_cycles_per_sample;
         }
@@ -575,7 +774,7 @@ impl AudioEngine {
                 .stats.stats_samples
                 .saturating_add(self.produced_samples.len() as u64);
         }
-        self.record_readbacks();
+        self.readbacks.flush(self.rendered_cpu_cycle);
         let dropped_stale = self.drop_stale_writes();
 
         if self.produced_samples.is_empty() && dropped_stale == 0 {
@@ -591,8 +790,7 @@ impl AudioEngine {
             );
         }
 
-        let stats_elapsed = self.stats.stats_last.elapsed();
-        if stats_elapsed >= Duration::from_secs(1) {
+        if let Some(stats_elapsed) = self.runtime.engine_stats_elapsed(Duration::from_secs(1)) {
             let secs = stats_elapsed.as_secs_f64().max(0.001);
             let samples_per_sec = self.stats.stats_samples as f64 / secs;
             log::info!(
@@ -605,7 +803,6 @@ impl AudioEngine {
                 self.pending_writes.len(),
                 self.runtime.dropped_stale_events()
             );
-            self.stats.stats_last = Instant::now();
             self.stats.stats_samples = 0;
         }
 

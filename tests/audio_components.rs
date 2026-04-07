@@ -4,19 +4,22 @@ use cody_emulator::device::audio::engine::{
     AudioEvent,
     AudioDataPlane,
 };
-use cody_emulator::device::audio::{AudioConfig, AudioEffect};
-use cody_emulator::device::audio::postprocess::{
-    AudioPostProcessConfig,
-    AudioPostProcessor,
-    BufferState,
+use cody_emulator::device::audio::AudioConfig;
+use cody_emulator::device::audio::post_buffer_policy::BufferState;
+use cody_emulator::device::audio::fx::{
+    AudioEffect,
     DcBlockEffect,
     GainEffect,
     OnePoleHighPassEffect,
     OnePoleLowPassEffect,
     SoftClipEffect,
 };
+use cody_emulator::device::audio::postprocess::{
+    AudioPostProcessConfig,
+    AudioPostProcessor,
+};
 use cody_emulator::device::audio::mmiodev::{AudioMmioDevice, AUDIO_BASE, AUDIO_REGISTER_COUNT};
-use cody_emulator::device::audio::queue::{BoundedQueue, PcmRingBuffer};
+use cody_emulator::device::audio::queue::{LockFreePcmRingBuffer, LockFreeQueue};
 use cody_emulator::device::audio::registers::AudioRegister;
 use cody_emulator::device::audio::synth::SidLikeSynth;
 use cody_emulator::cpu;
@@ -49,8 +52,8 @@ fn audio_register_roundtrip_and_invalid_decode() {
 }
 
 #[test]
-fn bounded_queue_drops_oldest_when_full() {
-    let mut q = BoundedQueue::with_capacity(2);
+fn lockfree_queue_drops_oldest_when_full() {
+    let q = LockFreeQueue::with_capacity(2);
     q.push_drop_oldest(1u8);
     q.push_drop_oldest(2u8);
     q.push_drop_oldest(3u8);
@@ -63,20 +66,21 @@ fn bounded_queue_drops_oldest_when_full() {
 }
 
 #[test]
-fn bounded_queue_drain_preserves_order() {
-    let mut q = BoundedQueue::with_capacity(4);
+fn lockfree_queue_drain_preserves_order() {
+    let q = LockFreeQueue::with_capacity(4);
     q.push_drop_oldest(10u8);
     q.push_drop_oldest(11u8);
     q.push_drop_oldest(12u8);
 
-    let drained = q.drain();
+    let mut drained = Vec::new();
+    q.drain_into(&mut drained);
     assert_eq!(drained, vec![10, 11, 12]);
     assert!(q.is_empty());
 }
 
 #[test]
 fn pcm_ring_buffer_tracks_overrun_and_underrun() {
-    let mut pcm = PcmRingBuffer::with_capacity(2);
+    let pcm = LockFreePcmRingBuffer::with_capacity(2);
     pcm.push_samples(&[0.1, 0.2, 0.3]);
 
     assert_eq!(pcm.len(), 2);
@@ -92,15 +96,15 @@ fn pcm_ring_buffer_tracks_overrun_and_underrun() {
 }
 
 #[test]
-fn pcm_ring_buffer_peek_and_pop_front() {
-    let mut pcm = PcmRingBuffer::with_capacity(4);
+fn pcm_ring_buffer_pop_front_discards_oldest() {
+    let pcm = LockFreePcmRingBuffer::with_capacity(4);
     pcm.push_samples(&[0.25, 0.5]);
-
-    assert!(approx_eq(pcm.peek(0).unwrap_or_default(), 0.25, 1e-6));
-    assert!(approx_eq(pcm.peek(1).unwrap_or_default(), 0.5, 1e-6));
-
     pcm.pop_front();
-    assert!(approx_eq(pcm.peek(0).unwrap_or_default(), 0.5, 1e-6));
+
+    let mut out = Vec::new();
+    pcm.pop_samples(1, &mut out);
+    assert_eq!(out.len(), 1);
+    assert!(approx_eq(out[0], 0.5, 1e-6));
 }
 
 #[test]
@@ -363,7 +367,7 @@ fn host_underrun_holds_last_sample() {
     assert!(approx_eq(out[1], 0.7, 1e-6));
     assert!(approx_eq(out[2], 0.7, 1e-6));
     // Explicitly check buffer state
-    assert!(matches!(host.buffer_state(), cody_emulator::device::audio::postprocess::BufferState::UnderrunHold));
+    assert!(matches!(host.buffer_state(), BufferState::UnderrunHold));
 }
 
 #[test]
@@ -388,7 +392,7 @@ fn host_underrun_uses_shadow_synth_when_snapshot_available() {
     assert_eq!(out.len(), 6);
     assert!(out.iter().any(|s| s.abs() > 0.0001));
     // Explicitly check buffer state
-    assert!(matches!(host.buffer_state(), cody_emulator::device::audio::postprocess::BufferState::UnderrunShadow));
+    assert!(matches!(host.buffer_state(), BufferState::UnderrunShadow));
 }
 
 #[test]
@@ -412,7 +416,7 @@ fn host_overrun_fast_forwards_old_pcm() {
     // Overrun should avoid replaying from the stale beginning of the queue.
     assert!(out[0] > 200.0);
     // Explicitly check buffer state
-    assert!(matches!(host.buffer_state(), cody_emulator::device::audio::postprocess::BufferState::Overrun));
+    assert!(matches!(host.buffer_state(), BufferState::Overrun));
 }
 
 #[test]
