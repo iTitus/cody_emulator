@@ -3,10 +3,8 @@
 //! This module consumes postprocessed audio and feeds it into the platform
 //! output stream when the `cpal-backend` feature is enabled.
 
-#[cfg(feature = "cpal-backend")]
-use crate::device::audio::compute_soft_cap_samples;
 use crate::device::audio::engine::SharedAudioDataPlane;
-use crate::device::audio::postprocess::{AudioPostProcessConfig, AudioPostProcessor};
+use crate::device::audio::postprocess::{AudioEffectChain, AudioPostProcessConfig, AudioPostProcessor};
 use std::sync::mpsc;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::thread;
@@ -30,6 +28,7 @@ struct AdaptiveMonitor {
     config: AudioPostProcessConfig,
     runtime: SharedAudioDataPlane,
     synth_sample_rate: u32,
+    effects: AudioEffectChain,
 }
 
 #[cfg(feature = "cpal-backend")]
@@ -44,7 +43,6 @@ impl AdaptiveMonitor {
     const NO_CALLBACK_SECS_THRESHOLD: u64 = 3;
     const RESTART_COOLDOWN: Duration = Duration::from_secs(5);
 
-    #[cfg(feature = "cpal-backend")]
     fn launch_session(&mut self, ready_tx: mpsc::Sender<()>) -> Option<cpal::Stream> {
         let mut stream = CpalHost::build_stream(
             &self.device,
@@ -54,6 +52,7 @@ impl AdaptiveMonitor {
             self.runtime.clone(),
             self.synth_sample_rate,
             self.config.channels.max(1),
+            &self.effects,
             ready_tx.clone(),
         );
         if stream.is_none() && !matches!(self.stream_cfg.buffer_size, cpal::BufferSize::Default) {
@@ -67,12 +66,14 @@ impl AdaptiveMonitor {
                 self.runtime.clone(),
                 self.synth_sample_rate,
                 self.config.channels.max(1),
+                &self.effects,
                 ready_tx,
             );
         }
         stream
     }
 
+    /// Runs the callback-gated session monitor loop and restarts streams when callbacks stop.
     fn run(mut self, ready_tx: mpsc::Sender<()>) {
         use cpal::traits::StreamTrait;
 
@@ -106,9 +107,18 @@ impl AdaptiveMonitor {
                 continue;
             }
 
-            log::info!("CPAL: waiting for first callback (timeout {:?})", Self::FIRST_CALLBACK_TIMEOUT);
-            if session_ready_rx.recv_timeout(Self::FIRST_CALLBACK_TIMEOUT).is_err() {
-                log::warn!("CPAL: no callback received within {:?}; restarting session", Self::FIRST_CALLBACK_TIMEOUT);
+            log::info!(
+                "CPAL: waiting for first callback (timeout {:?})",
+                Self::FIRST_CALLBACK_TIMEOUT
+            );
+            if session_ready_rx
+                .recv_timeout(Self::FIRST_CALLBACK_TIMEOUT)
+                .is_err()
+            {
+                log::warn!(
+                    "CPAL: no callback received within {:?}; restarting session",
+                    Self::FIRST_CALLBACK_TIMEOUT
+                );
                 drop(stream);
                 log::info!(
                     "CPAL: restart attempt deferred after missing first callback; cooling down for {:?}",
@@ -160,7 +170,10 @@ impl AdaptiveMonitor {
 
             self.runtime.set_audio_output_enabled(false);
             drop(stream);
-            log::info!("CPAL: audio session closed; cooling down for {:?}", Self::RESTART_COOLDOWN);
+            log::info!(
+                "CPAL: audio session closed; cooling down for {:?}",
+                Self::RESTART_COOLDOWN
+            );
             thread::sleep(Self::RESTART_COOLDOWN);
         }
     }
@@ -168,54 +181,10 @@ impl AdaptiveMonitor {
 
 impl CpalHost {
     #[cfg(feature = "cpal-backend")]
+    /// Updates soft-cap buffering based on the current target latency.
     fn update_soft_cap(runtime: &SharedAudioDataPlane) {
         let target_latency_samples = runtime.target_latency_samples();
-        let staging_capacity = runtime.pcm_capacity_samples();
-        if target_latency_samples < 128 {
-            log::error!(
-                "Audio config invalid: target_latency={} samples below minimum 128",
-                target_latency_samples
-            );
-        }
-        if staging_capacity < target_latency_samples.saturating_mul(2) {
-            log::error!(
-                "Audio config invalid: staging_capacity={} samples < target_latency*2 ({} samples)",
-                staging_capacity,
-                target_latency_samples.saturating_mul(2)
-            );
-        }
-        if target_latency_samples > staging_capacity / 2 {
-            log::error!(
-                "Audio config invalid: target_latency={} samples exceeds staging_capacity/2 ({} samples)",
-                target_latency_samples,
-                staging_capacity / 2
-            );
-        }
-        if staging_capacity <= target_latency_samples {
-            log::error!(
-                "Audio config invalid: staging_capacity={} samples <= target_latency={} samples",
-                staging_capacity,
-                target_latency_samples
-            );
-        }
-        let soft_cap = compute_soft_cap_samples(target_latency_samples, staging_capacity);
-        let min_cap = target_latency_samples.saturating_mul(2);
-        let max_cap = staging_capacity.saturating_sub(target_latency_samples);
-        if soft_cap < min_cap || soft_cap > max_cap {
-            log::error!(
-                "Audio config invalid: soft_cap={} samples not in [{}, {}]",
-                soft_cap,
-                min_cap,
-                max_cap
-            );
-        }
-        runtime.set_pcm_soft_cap_samples(soft_cap);
-        log::info!(
-            "Audio buffer policy: soft_cap={} samples (target_latency={}, staging_capacity={})",
-            soft_cap,
-            target_latency_samples,
-            staging_capacity
-        );
+        runtime.configure_buffering(target_latency_samples);
     }
 
     /// Creates a host and starts the output stream when CPAL is enabled.
@@ -259,6 +228,7 @@ impl CpalHost {
     }
 
     #[cfg(feature = "cpal-backend")]
+    /// Builds and launches the CPAL output stream and monitor thread.
     fn start_stream(
         post_processor: AudioPostProcessor,
         mut config: AudioPostProcessConfig,
@@ -297,6 +267,7 @@ impl CpalHost {
 
         let runtime = post_processor.shared_data_plane();
         let synth_sample_rate = post_processor.synth_sample_rate();
+        let effects = post_processor.effect_chain();
         Self::update_soft_cap(&runtime);
         let monitor = Self::spawn_adaptive_monitor(
             device,
@@ -305,6 +276,7 @@ impl CpalHost {
             config,
             runtime,
             synth_sample_rate,
+            effects,
             ready_tx,
         );
 
@@ -312,6 +284,23 @@ impl CpalHost {
     }
 
     #[cfg(feature = "cpal-backend")]
+    fn build_post_processor(
+        runtime: SharedAudioDataPlane,
+        synth_sample_rate: u32,
+        effects: &AudioEffectChain,
+    ) -> AudioPostProcessor {
+        let mut post_processor = AudioPostProcessor::new(runtime, synth_sample_rate);
+        if !effects.pre.is_empty() {
+            post_processor.set_pre_effects(effects.pre.clone());
+        }
+        if !effects.post.is_empty() {
+            post_processor.set_post_effects(effects.post.clone());
+        }
+        post_processor
+    }
+
+    #[cfg(feature = "cpal-backend")]
+    /// Creates a CPAL stream for the negotiated sample format.
     fn build_stream(
         device: &cpal::Device,
         sample_format: cpal::SampleFormat,
@@ -320,6 +309,7 @@ impl CpalHost {
         runtime: SharedAudioDataPlane,
         synth_sample_rate: u32,
         channels: usize,
+        effects: &AudioEffectChain,
         ready_tx: mpsc::Sender<()>,
     ) -> Option<cpal::Stream> {
         use cpal::SampleFormat;
@@ -334,21 +324,19 @@ impl CpalHost {
             );
         };
         let err_fn = |err| log::warn!("CPAL output stream error: {err}");
-        let callback_runtime = runtime.clone();
-        let first_callback_seen = Arc::new(AtomicBool::new(false));
 
         match sample_format {
             SampleFormat::F32 => {
-                let mut post_processor = AudioPostProcessor::new(runtime, synth_sample_rate);
+                let mut post_processor = Self::build_post_processor(runtime, synth_sample_rate, effects);
+                let callback_runtime = post_processor.shared_data_plane();
+                let callback_ready = Arc::new(AtomicBool::new(false));
                 let config = config.clone();
-                let callback_runtime = callback_runtime.clone();
                 let ready_tx = ready_tx.clone();
-                let first_callback_seen = first_callback_seen.clone();
                 match device.build_output_stream(
                     stream_cfg,
                     move |data: &mut [f32], _| {
                         callback_runtime.note_callback_activity();
-                        if !first_callback_seen.swap(true, Ordering::AcqRel) {
+                        if !callback_ready.swap(true, Ordering::Relaxed) {
                             let _ = ready_tx.send(());
                         }
                         Self::fill_output_f32(data, channels, &mut post_processor, &config);
@@ -364,17 +352,17 @@ impl CpalHost {
                 }
             }
             SampleFormat::I16 => {
-                let mut post_processor = AudioPostProcessor::new(runtime, synth_sample_rate);
+                let mut post_processor = Self::build_post_processor(runtime, synth_sample_rate, effects);
+                let callback_runtime = post_processor.shared_data_plane();
+                let callback_ready = Arc::new(AtomicBool::new(false));
                 let config = config.clone();
-                let mut scratch: Vec<f32> = Vec::new();
-                let callback_runtime = callback_runtime.clone();
                 let ready_tx = ready_tx.clone();
-                let first_callback_seen = first_callback_seen.clone();
+                let mut scratch: Vec<f32> = Vec::new();
                 match device.build_output_stream(
                     stream_cfg,
                     move |data: &mut [i16], _| {
                         callback_runtime.note_callback_activity();
-                        if !first_callback_seen.swap(true, Ordering::AcqRel) {
+                        if !callback_ready.swap(true, Ordering::Relaxed) {
                             let _ = ready_tx.send(());
                         }
                         Self::fill_output_i16(
@@ -396,17 +384,17 @@ impl CpalHost {
                 }
             }
             SampleFormat::U16 => {
-                let mut post_processor = AudioPostProcessor::new(runtime, synth_sample_rate);
+                let mut post_processor = Self::build_post_processor(runtime, synth_sample_rate, effects);
+                let callback_runtime = post_processor.shared_data_plane();
+                let callback_ready = Arc::new(AtomicBool::new(false));
                 let config = config.clone();
-                let mut scratch: Vec<f32> = Vec::new();
-                let callback_runtime = callback_runtime.clone();
                 let ready_tx = ready_tx.clone();
-                let first_callback_seen = first_callback_seen.clone();
+                let mut scratch: Vec<f32> = Vec::new();
                 match device.build_output_stream(
                     stream_cfg,
                     move |data: &mut [u16], _| {
                         callback_runtime.note_callback_activity();
-                        if !first_callback_seen.swap(true, Ordering::AcqRel) {
+                        if !callback_ready.swap(true, Ordering::Relaxed) {
                             let _ = ready_tx.send(());
                         }
                         Self::fill_output_u16(
@@ -435,6 +423,7 @@ impl CpalHost {
     }
 
     #[cfg(feature = "cpal-backend")]
+    /// Logs the negotiated output format and estimated end-to-end latency.
     fn log_output_config(
         stream_cfg: &cpal::StreamConfig,
         sample_format: cpal::SampleFormat,
@@ -476,6 +465,7 @@ impl CpalHost {
     }
 
     #[cfg(feature = "cpal-backend")]
+    /// Spawns the adaptive monitor thread.
     fn spawn_adaptive_monitor(
         device: cpal::Device,
         sample_format: cpal::SampleFormat,
@@ -483,6 +473,7 @@ impl CpalHost {
         config: AudioPostProcessConfig,
         runtime: SharedAudioDataPlane,
         synth_sample_rate: u32,
+        effects: AudioEffectChain,
         ready_tx: mpsc::Sender<()>,
     ) -> std::thread::JoinHandle<()> {
         let monitor = AdaptiveMonitor {
@@ -492,12 +483,14 @@ impl CpalHost {
             config,
             runtime,
             synth_sample_rate,
+            effects,
         };
 
         thread::spawn(move || monitor.run(ready_tx))
     }
 
     #[cfg(feature = "cpal-backend")]
+    /// Picks a buffer size aligned to typical audio frame boundaries.
     fn pick_buffer_size(
         device: &cpal::Device,
         sample_format: cpal::SampleFormat,

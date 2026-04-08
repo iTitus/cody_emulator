@@ -2,7 +2,7 @@ use crate::cpu;
 use crate::cpu::Cpu;
 use crate::device::audio::factory::create_audio_pipeline;
 use crate::device::audio::host::CpalHost;
-use crate::device::audio::mmiodev::{AUDIO_BASE, AUDIO_REGISTER_COUNT};
+use crate::device::audio::mmiodev::{AudioMmioDevice, AUDIO_BASE, AUDIO_REGISTER_COUNT};
 use crate::device::audio::postprocess::AudioPostProcessConfig;
 use crate::device::blanking::BlankingRegister;
 use crate::device::keyboard::{Keyboard, KeyboardEmulation};
@@ -18,6 +18,7 @@ use pixels::{Pixels, SurfaceTexture};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::sleep;
@@ -183,9 +184,10 @@ pub fn start(
     );
     memory.add_memory(UART2_BASE, UART_END, uart2);
 
-    let (audio, audio_post_processor) = create_audio_pipeline();
+    let pipeline = create_audio_pipeline();
+    let audio = Rc::new(RefCell::new(pipeline.mmio));
     let mut audio_host = CpalHost::new(
-        audio_post_processor,
+        pipeline.post,
         AudioPostProcessConfig {
             preferred_output_buffer_frames: audio_buffer_frames,
             ..AudioPostProcessConfig::default()
@@ -194,7 +196,7 @@ pub fn start(
     if !audio_host.wait_ready(Duration::from_secs(3)) {
         info!("Audio output not ready yet; continuing startup");
     }
-    memory.add_memory(AUDIO_BASE, AUDIO_REGISTER_COUNT, audio);
+    memory.add_memory(AUDIO_BASE, AUDIO_REGISTER_COUNT, Rc::clone(&audio));
 
     memory.add_memory(0xD000, 0x1, BlankingRegister::default());
 
@@ -210,6 +212,7 @@ pub fn start(
             key_state,
         ),
         fast,
+        audio: Rc::clone(&audio),
         _audio_host: audio_host,
         last_frame_start: Instant::now(),
         stats_last: Instant::now(),
@@ -231,6 +234,7 @@ struct App<M> {
     cpu: Cpu<M>,
     keyboard: Keyboard,
     fast: bool,
+    audio: Rc<RefCell<AudioMmioDevice>>,
     _audio_host: CpalHost,
     last_frame_start: Instant,
     stats_last: Instant,
@@ -267,6 +271,7 @@ impl<M: Memory> ApplicationHandler for App<M> {
                 SurfaceTexture::new(window_size.width, window_size.height, Arc::clone(&window));
             Pixels::new(WIDTH, HEIGHT, surface_texture).expect("pixels framebuffer created")
         };
+
         self.state = Some(State { window, pixels });
     }
 
@@ -353,6 +358,12 @@ impl<M: Memory> ApplicationHandler for App<M> {
 
             realtime_elapsed
         };
+
+        if self.fast {
+            let frame_secs = frame_time.as_secs_f64().max(0.001);
+            let cycles_per_sec = total_cycles as f64 / frame_secs;
+            self.audio.borrow_mut().update_cpu_hz(cycles_per_sec);
+        }
 
         self.stats_cycles += total_cycles as u64;
         self.stats_instructions += total_instructions as u64;

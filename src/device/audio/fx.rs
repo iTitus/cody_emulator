@@ -1,7 +1,27 @@
 //! Audio effects used by the postprocessor.
 
+/// Clone support for boxed audio effects.
+pub trait AudioEffectClone {
+    fn clone_box(&self) -> Box<dyn AudioEffect>;
+}
+
+impl<T> AudioEffectClone for T
+where
+    T: 'static + AudioEffect + Clone,
+{
+    fn clone_box(&self) -> Box<dyn AudioEffect> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn AudioEffect> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
+
 /// Stateful audio effect component that mutates audio buffers in-place.
-pub trait AudioEffect: Send {
+pub trait AudioEffect: Send + AudioEffectClone {
     fn prepare(&mut self, channels: usize, sample_rate_hz: u32);
     fn process_in_place(&mut self, buffer: &mut [f32]);
     fn reset(&mut self);

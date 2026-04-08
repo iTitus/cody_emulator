@@ -10,8 +10,13 @@ pub mod fx;
 pub mod factory;
 pub mod host;
 pub mod mmiodev;
+pub mod core;
+pub mod post_buffer_policy;
 pub mod postprocess;
 pub mod queue;
+pub mod registers;
+pub mod post_resampler;
+pub mod source;
 pub mod synth;
 
 #[derive(Debug, Clone, Copy)]
@@ -46,18 +51,8 @@ pub(crate) fn compute_soft_cap_samples(
 }
 
 pub use host::CpalHost;
-pub use factory::{create_audio_pipeline, create_audio_pipeline_with_timing};
+pub use core::AudioCore;
+pub use factory::{AudioPipeline, create_audio_core, create_audio_pipeline, create_audio_pipeline_with_timing};
 pub use mmiodev::{AUDIO_BASE, AUDIO_REGISTER_COUNT, AudioMmioDevice};
-pub use fx::{
-    AudioEffect,
-    DcBlockEffect,
-    GainEffect,
-    OnePoleHighPassEffect,
-    OnePoleLowPassEffect,
-    SoftClipEffect,
-};
-pub use postprocess::{
-    AudioPostProcessConfig,
-    AudioPostProcessor,
-};
-pub use synth::AudioRegister;
+pub use postprocess::{AudioPostProcessConfig, AudioPostProcessor};
+pub use registers::AudioRegister;

@@ -4,16 +4,10 @@
 //! Writes are queued as cycle-stamped events and reads of special readback
 //! registers are resolved through the audio engine.
 
-use crate::device::audio::engine::{AudioEngine, AudioEvent, AudioTiming, SharedAudioDataPlane};
-use crate::device::audio::engine::SharedAudioControlPlane;
-use crate::device::audio::factory::{
-    create_audio_control_plane,
-    create_audio_data_plane,
-    create_audio_engine,
-};
+use crate::device::audio::core::AudioCore;
+use crate::device::audio::engine::{AudioEvent, SharedAudioDataPlane};
 use crate::device::audio::AudioConfig;
-use crate::device::audio::compute_soft_cap_samples;
-use crate::device::audio::synth::AudioRegister;
+use crate::device::audio::registers::AudioRegister;
 use crate::interrupt::Interrupt;
 use crate::memory::Memory;
 
@@ -32,9 +26,7 @@ const DEFAULT_TARGET_LATENCY_SAMPLES: u32 = 128;  // 8ms of buffering @ 16kHz
 #[derive(Debug, Clone)]
 pub struct AudioMmioDevice {
     registers: [u8; AUDIO_REGISTER_COUNT as usize],
-    runtime: SharedAudioDataPlane,
-    control_queues: SharedAudioControlPlane,
-    engine: AudioEngine,
+    core: AudioCore,
     last_cycle: usize,
     last_osc3: u8,
     last_env3: u8,
@@ -63,44 +55,19 @@ impl AudioMmioDevice {
     /// Creates an MMIO audio device with explicit timing parameters.
     /// target_latency_cycles: desired audio buffer latency in CPU cycles
     pub fn with_timing(config: AudioConfig) -> Self {
-        let runtime = create_audio_data_plane(DEFAULT_PCM_CAPACITY);
-        let control_queues = create_audio_control_plane(DEFAULT_WRITE_QUEUE_CAPACITY);
-        let engine = create_audio_engine(
-            runtime.clone(),
-            control_queues.clone(),
+        let core = AudioCore::new(
             config,
+            DEFAULT_PCM_CAPACITY,
+            DEFAULT_WRITE_QUEUE_CAPACITY,
         );
-
-        let timing = AudioTiming::new(config);
-        let soft_cap = compute_soft_cap_samples(
-            timing.target_latency_samples,
-            runtime.pcm_capacity_samples(),
-        );
-        runtime.set_pcm_soft_cap_samples(soft_cap);
-        log::info!(
-            "Audio device timing: cpu_hz={:.2}, synth_hz={}, cycles_per_sample={:.3}, target_latency_cycles={:.1} (~{} samples), soft_cap={} samples",
-            timing.cpu_hz,
-            timing.synth_sample_rate,
-            timing.cpu_cycles_per_sample,
-            timing.target_latency_cycles,
-            timing.target_latency_samples,
-            soft_cap
-        );
-
-        Self::from_runtime_and_engine(runtime, control_queues, engine)
+        Self::from_core(core)
     }
 
-    /// Creates a device from prebuilt runtime and engine components.
-    pub(crate) fn from_runtime_and_engine(
-        runtime: SharedAudioDataPlane,
-        control_queues: SharedAudioControlPlane,
-        engine: AudioEngine,
-    ) -> Self {
+    /// Creates a device from a prebuilt audio core.
+    pub(crate) fn from_core(core: AudioCore) -> Self {
         Self {
             registers: [0; AUDIO_REGISTER_COUNT as usize],
-            runtime,
-            control_queues,
-            engine,
+            core,
             last_cycle: 0,
             last_osc3: 0,
             last_env3: 0,
@@ -109,28 +76,34 @@ impl AudioMmioDevice {
 
     /// Returns a clone of the shared runtime handle.
     pub fn shared_data_plane(&self) -> SharedAudioDataPlane {
-        self.runtime.clone()
+        self.core.runtime()
     }
 
     /// Returns the synth sample rate produced by this device's engine.
     pub(crate) fn synth_sample_rate(&self) -> u32 {
-        self.engine.synth_sample_rate()
+        self.core.synth_sample_rate()
+    }
+
+    /// Updates CPU timing to keep audio in sync with the emulator clock.
+    pub fn update_cpu_hz(&mut self, cpu_hz: f64) {
+        self.core.engine_mut().update_cpu_hz(cpu_hz);
     }
 
     /// Queues a register write tagged with the most recent CPU cycle.
     fn queue_write_event(&mut self, register: u8, value: u8) {
         log::trace!("Audio MMIO write: reg 0x{:02X} = 0x{:02X} @ cycle {}", register, value, self.last_cycle);
-        self.control_queues.write_events.push_drop_oldest(AudioEvent {
+        self.core.control_plane().write_events.push_drop_oldest(AudioEvent {
             cycle: self.last_cycle,
             register,
             value,
         });
     }
 
-    /// Resolves a readback value at the current CPU cycle.
+    /// Resolves a readback value at the current CPU cycle and caches it.
     fn resolve_readback(&mut self, register: u8) -> u8 {
         let value = self
-            .engine
+            .core
+            .engine_mut()
             .resolve_readback_value(self.last_cycle, register, self.last_cycle);
         match register {
             r if r == AudioRegister::Osc3Read.as_u8() => self.last_osc3 = value,
@@ -174,7 +147,7 @@ impl Memory for AudioMmioDevice {
 
     fn update(&mut self, cycle: usize) -> Interrupt {
         self.last_cycle = cycle;
-        self.engine.advance_to_cpu_cycle(cycle);
+        self.core.engine_mut().advance_to_cpu_cycle(cycle);
         Interrupt::none()
     }
 }
