@@ -23,6 +23,7 @@ const CTRL_TRIANGLE: u8 = 0x10;
 const CTRL_SAW: u8 = 0x20;
 const CTRL_PULSE: u8 = 0x40;
 const CTRL_NOISE: u8 = 0x80;
+const NOISE_TAPS: u16 = 0xB400;
 const ENVELOPE_MAX_LEVEL_24: u32 = 0xFF_FFFF / 3;
 
 const ATTACK_TIMES_SEC: [f32; 16] = [
@@ -49,8 +50,7 @@ struct VoiceState {
     envelope: f32,
     env_phase: EnvelopePhase,
     last_gate: bool,
-    noise_lfsr: u16,
-    noise_phase_bit: u8,
+    noise_wave: u16,
 }
 
 impl Default for VoiceState {
@@ -60,8 +60,7 @@ impl Default for VoiceState {
             envelope: 0.0,
             env_phase: EnvelopePhase::Release,
             last_gate: false,
-            noise_lfsr: 0xACE1,
-            noise_phase_bit: 0,
+            noise_wave: 0,
         }
     }
 }
@@ -72,6 +71,7 @@ pub struct SidLikeSynth {
     pub registers: [u8; REGISTER_COUNT],
     voices: [VoiceState; VOICE_COUNT],
     osc3_wave_readback: u8,
+    noise_lfsr: u16,
 }
 
 impl Default for SidLikeSynth {
@@ -83,14 +83,13 @@ impl Default for SidLikeSynth {
 impl SidLikeSynth {
     /// Creates a new synth with initial voice state.
     pub fn new() -> Self {
-        let mut voices = array::from_fn(|_| VoiceState::default());
-        voices[1].noise_lfsr = 0xBEEF;
-        voices[2].noise_lfsr = 0xC0DE;
+        let voices = array::from_fn(|_| VoiceState::default());
 
         Self {
             registers: [0; REGISTER_COUNT],
             voices,
             osc3_wave_readback: 0,
+            noise_lfsr: 0xACE1,
         }
     }
 
@@ -132,9 +131,11 @@ impl SidLikeSynth {
     /// Renders a single mono sample at `sample_rate_hz`.
     pub fn render_sample(&mut self, sample_rate_hz: u32) -> f32 {
         let sample_rate_hz = sample_rate_hz.max(1) as f32; // TODO: handle limit somewhere else
+        self.noise_lfsr = advance_noise_lfsr(self.noise_lfsr);
 
         let mut controls = [0u8; VOICE_COUNT];
         let mut wrapped = [false; VOICE_COUNT];
+        let mut noise_clocked = [false; VOICE_COUNT];
 
         for i in 0..VOICE_COUNT {
             let base = i * VOICE_STRIDE;
@@ -146,7 +147,6 @@ impl SidLikeSynth {
                 self.voices[i].envelope = 0.0;
                 self.voices[i].env_phase = EnvelopePhase::Release;
                 self.voices[i].last_gate = false;
-                self.voices[i].noise_phase_bit = 0;
                 if i == 2 {
                     self.osc3_wave_readback = 0;
                 }
@@ -158,6 +158,7 @@ impl SidLikeSynth {
             let previous_phase = self.voices[i].phase;
             let new_phase = previous_phase.wrapping_add(phase_increment);
             wrapped[i] = new_phase < previous_phase;
+            noise_clocked[i] = ((previous_phase ^ new_phase) & 0x4000) != 0;
             self.voices[i].phase = new_phase;
 
             self.update_envelope(i, control, sample_rate_hz);
@@ -187,10 +188,16 @@ impl SidLikeSynth {
                 continue;
             }
 
-            let mut wave = self.waveform_for_voice(i, control, base);
-            if i == 2 {
-                self.osc3_wave_readback = waveform_to_readback_u8(wave);
+            let mut wave = self.waveform_for_voice(i, control, base, noise_clocked[i]);
+
+            if i == 2 {  // readback logic
+                self.osc3_wave_readback = if (control & CTRL_NOISE) != 0 {
+                    (self.voices[i].noise_wave >> 8) as u8
+                } else {
+                    waveform_to_readback_u8(wave)
+                };
             }
+
             if (control & CTRL_RING) != 0 {
                 let mod_index = match i {
                     0 => 2,
@@ -265,7 +272,13 @@ impl SidLikeSynth {
     }
 
     /// Produces one raw waveform sample for a voice before envelope scaling.
-    fn waveform_for_voice(&mut self, voice_index: usize, control: u8, base: usize) -> f32 {
+    fn waveform_for_voice(
+        &mut self,
+        voice_index: usize,
+        control: u8,
+        base: usize,
+        noise_clocked: bool,
+    ) -> f32 {
         let phase = self.voices[voice_index].phase;
 
         if (control & CTRL_TRIANGLE) != 0 {
@@ -281,18 +294,11 @@ impl SidLikeSynth {
             return if phase < threshold { 1.0 } else { -1.0 };
         }
         if (control & CTRL_NOISE) != 0 {
-            let phase_bit = ((phase >> 14) & 0x01) as u8;
             let voice = &mut self.voices[voice_index];
-            if phase_bit != voice.noise_phase_bit {
-                let feedback = ((voice.noise_lfsr >> 0)
-                    ^ (voice.noise_lfsr >> 2)
-                    ^ (voice.noise_lfsr >> 3)
-                    ^ (voice.noise_lfsr >> 5))
-                    & 1;
-                voice.noise_lfsr = (voice.noise_lfsr >> 1) | (feedback << 15);
-                voice.noise_phase_bit = phase_bit;
+            if noise_clocked {
+                voice.noise_wave = self.noise_lfsr;
             }
-            let normalized = voice.noise_lfsr as f32 / 65535.0;
+            let normalized = voice.noise_wave as f32 / 65535.0;
             return normalized * 2.0 - 1.0;
         }
 
@@ -331,4 +337,9 @@ fn waveform_to_readback_u8(sample: f32) -> u8 {
 fn envelope_to_readback_u8(envelope: f32) -> u8 {
     let amplitude_24 = (envelope.clamp(0.0, 1.0) * ENVELOPE_MAX_LEVEL_24 as f32) as u32;
     (amplitude_24 >> 16) as u8
+}
+
+fn advance_noise_lfsr(noise: u16) -> u16 {
+    let feedback = if (noise & 1) != 0 { NOISE_TAPS } else { 0 };
+    (noise >> 1) ^ feedback
 }

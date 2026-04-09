@@ -52,6 +52,14 @@ fn configure_voice3_triangle(synth: &mut SidLikeSynth) {
     synth.write_register(AudioRegister::V2Control.as_u8(), 0x10 | 0x01);
 }
 
+fn configure_voice3_noise(synth: &mut SidLikeSynth) {
+    synth.write_register(AudioRegister::V2FreqLo.as_u8(), 0xFF);
+    synth.write_register(AudioRegister::V2FreqHi.as_u8(), 0xFF);
+    synth.write_register(AudioRegister::V2Ad.as_u8(), 0x00);
+    synth.write_register(AudioRegister::V2Sr.as_u8(), 0xF0);
+    synth.write_register(AudioRegister::V2Control.as_u8(), 0x80 | 0x01);
+}
+
 #[test]
 fn audio_register_roundtrip_and_invalid_decode() {
     let reg = AudioRegister::from_u8(AudioRegister::V1PwHi.as_u8());
@@ -169,6 +177,19 @@ fn synth_env3_readback_caps_at_spin_maxlevel() {
     }
 
     assert_eq!(synth.env3_readback(), 0x55);
+}
+
+#[test]
+fn synth_noise_readback_uses_shared_lfsr_latching() {
+    let mut synth = SidLikeSynth::new();
+    configure_voice3_noise(&mut synth);
+    synth.write_register(AudioRegister::FilterModeVolume.as_u8(), 0x0F);
+
+    let _ = synth.render_sample(16_000);
+    assert_eq!(synth.osc3_readback(), 0x00);
+
+    let _ = synth.render_sample(16_000);
+    assert_eq!(synth.osc3_readback(), 0x71);
 }
 
 #[test]
@@ -295,6 +316,51 @@ fn engine_triangle_readback_values_are_exact() {
 
     assert_eq!(osc3, 0x7F);
     assert_eq!(env3, 0x02);
+}
+
+#[test]
+fn engine_noise_readback_uses_shared_lfsr_latching() {
+    let runtime = Arc::new(AudioDataPlane::new(512));
+    let control = Arc::new(AudioControlPlane::new(512));
+    let config = AudioConfig::new(1_000_000.0, 16_000, 256.0);
+    let mut engine = AudioEngine::new(Arc::clone(&runtime), Arc::clone(&control), config);
+
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2FreqLo.as_u8(),
+        value: 0xFF,
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2FreqHi.as_u8(),
+        value: 0xFF,
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2Ad.as_u8(),
+        value: 0x00,
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2Sr.as_u8(),
+        value: 0xF0,
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2Control.as_u8(),
+        value: 0x80 | 0x01, // noise + gate
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::FilterModeVolume.as_u8(),
+        value: 0x0F,
+    });
+
+    let first = engine.resolve_readback_value(100, AudioRegister::Osc3Read.as_u8(), 100);
+    let second = engine.resolve_readback_value(130, AudioRegister::Osc3Read.as_u8(), 130);
+
+    assert_eq!(first, 0x00);
+    assert_eq!(second, 0x71);
 }
 
 #[test]
@@ -779,6 +845,28 @@ fn mmio_triangle_readback_values_are_exact() {
 
     assert_eq!(osc3, 0x7F);
     assert_eq!(env3, 0x02);
+}
+
+#[test]
+fn mmio_noise_readback_uses_shared_lfsr_latching() {
+    let config = AudioConfig::new(1_000_000.0, 16_000, 256.0);
+    let mut dev = AudioMmioDevice::with_timing(config);
+
+    dev.write_u8(AudioRegister::V2FreqLo.as_u8() as u16, 0xFF);
+    dev.write_u8(AudioRegister::V2FreqHi.as_u8() as u16, 0xFF);
+    dev.write_u8(AudioRegister::V2Ad.as_u8() as u16, 0x00);
+    dev.write_u8(AudioRegister::V2Sr.as_u8() as u16, 0xF0);
+    dev.write_u8(AudioRegister::V2Control.as_u8() as u16, 0x80 | 0x01);
+    dev.write_u8(AudioRegister::FilterModeVolume.as_u8() as u16, 0x0F);
+
+    let _ = dev.update(100);
+    let first = dev.read_u8(AudioRegister::Osc3Read.as_u8() as u16);
+
+    let _ = dev.update(130);
+    let second = dev.read_u8(AudioRegister::Osc3Read.as_u8() as u16);
+
+    assert_eq!(first, 0x00);
+    assert_eq!(second, 0x71);
 }
 
 #[test]
