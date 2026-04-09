@@ -62,9 +62,13 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     audio_resampler_fast: bool,
 
-    /// Disable audio output (but keep the audio engine running for authentic emulation of audio register behavior).
+    /// Disable audio output (keeps the audio engine running for authentic emulation of audio register behavior).
     #[arg(long, default_value_t = false)]
-    audio_off: bool,
+    audio_silent: bool,
+
+    /// Disable audio entirely (disables everything related to audio, including the MMIO device and engine).
+    #[arg(long, default_value_t = false)]
+    audio_disable: bool,
 
     /// Each time this option is added increases the default logging level
     #[arg(short, long, action = clap::ArgAction::Count)]
@@ -123,7 +127,8 @@ pub fn main() {
         cli.audio_latency.buffer_frames(),
         cli.audio_no_initial_catchup,
         cli.audio_resampler_fast,
-        cli.audio_off
+        cli.audio_silent,
+        cli.audio_disable
     );
 }
 

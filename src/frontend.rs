@@ -44,6 +44,7 @@ pub fn start(
     audio_no_initial_catchup: bool,
     audio_resampler_fast: bool,
     audio_off: bool,
+    audio_disable: bool,
 ) {
     let path = path.as_ref();
     info!(
@@ -185,18 +186,28 @@ pub fn start(
     );
     memory.add_memory(UART2_BASE, UART_END, uart2);
 
-    let frontend_audio = create_frontend_audio(FrontendAudioOptions {
-        audio_off,
-        audio_no_initial_catchup,
-        audio_resampler_fast,
-        audio_buffer_frames,
-    });
-    let audio = Rc::new(RefCell::new(frontend_audio.mmio));
-    let mut audio_host = frontend_audio.host;
-    if !audio_host.wait_ready(Duration::from_secs(3)) {
-        info!("Audio output not ready yet; continuing startup");
+    let mut audio: Option<Rc<RefCell<AudioMmioDevice>>> = None;
+    let mut audio_host: Option<FrontendAudioHost> = None;
+    if audio_disable {
+        log::info!(
+            "Audio completely disabled, skipping initialisation of everything sound-related (including MMIO device and engine)."
+        );
+    } else {
+        let frontend_audio = create_frontend_audio(FrontendAudioOptions {
+            audio_off,
+            audio_no_initial_catchup,
+            audio_resampler_fast,
+            audio_buffer_frames,
+        });
+        let audio_dev = Rc::new(RefCell::new(frontend_audio.mmio));
+        let mut host = frontend_audio.host;
+        if !host.wait_ready(Duration::from_secs(3)) {
+            info!("Audio output not ready yet; continuing startup");
+        }
+        memory.add_memory(AUDIO_BASE, AUDIO_REGISTER_COUNT, Rc::clone(&audio_dev));
+        audio = Some(audio_dev);
+        audio_host = Some(host);
     }
-    memory.add_memory(AUDIO_BASE, AUDIO_REGISTER_COUNT, Rc::clone(&audio));
 
     memory.add_memory(0xD000, 0x1, BlankingRegister::default());
 
@@ -212,7 +223,7 @@ pub fn start(
             key_state,
         ),
         fast,
-        audio: Rc::clone(&audio),
+        audio,
         _audio_host: audio_host,
         last_frame_start: Instant::now(),
         stats_last: Instant::now(),
@@ -234,8 +245,8 @@ struct App<M> {
     cpu: Cpu<M>,
     keyboard: Keyboard,
     fast: bool,
-    audio: Rc<RefCell<AudioMmioDevice>>,
-    _audio_host: FrontendAudioHost,
+    audio: Option<Rc<RefCell<AudioMmioDevice>>>,
+    _audio_host: Option<FrontendAudioHost>,
     last_frame_start: Instant,
     stats_last: Instant,
     stats_cycles: u64,
@@ -362,7 +373,9 @@ impl<M: Memory> ApplicationHandler for App<M> {
         if self.fast {
             let frame_secs = frame_time.as_secs_f64().max(0.001);
             let cycles_per_sec = total_cycles as f64 / frame_secs;
-            self.audio.borrow_mut().update_cpu_hz(cycles_per_sec);
+            if let Some(audio) = &self.audio {
+                audio.borrow_mut().update_cpu_hz(cycles_per_sec);
+            }
         }
 
         self.stats_cycles += total_cycles as u64;
