@@ -8,10 +8,7 @@ use crate::device::audio::postprocess::{
     AudioEffectChain, AudioPostProcessConfig, AudioPostProcessor, PostResamplerFactory,
 };
 use std::sync::mpsc;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -48,6 +45,8 @@ pub struct CpalHost {
     _monitor: Option<std::thread::JoinHandle<()>>,
     #[cfg(feature = "cpal-backend")]
     ready_rx: Option<mpsc::Receiver<()>>,
+    #[cfg(feature = "cpal-backend")]
+    signals: Arc<MonitorSignals>,
 }
 
 #[cfg(feature = "cpal-backend")]
@@ -61,6 +60,7 @@ struct AdaptiveMonitor {
     effects: AudioEffectChain,
     initial_catchup_enabled: bool,
     resampler_factory: PostResamplerFactory,
+    signals: Arc<MonitorSignals>,
 }
 
 #[cfg(feature = "cpal-backend")]
@@ -70,12 +70,128 @@ struct MonitorState {
 }
 
 #[cfg(feature = "cpal-backend")]
+#[derive(Default)]
+/// Condvar-protected monitor state.
+///
+/// `callback_epoch` increments for each host callback and is used as a monotonic
+/// sequence number so the monitor can wait for "next callback" events.
+struct MonitorSignalsState {
+    shutdown: bool,
+    callback_epoch: u64,
+}
+
+#[cfg(feature = "cpal-backend")]
+/// Synchronization hub for CPAL callbacks and the adaptive monitor thread.
+///
+/// This keeps monitor waits event-driven (callback or shutdown) while still
+/// allowing bounded timeout waits for restart/backoff policies.
+struct MonitorSignals {
+    state: Mutex<MonitorSignalsState>,
+    cv: Condvar,
+}
+
+#[cfg(feature = "cpal-backend")]
+/// Outcome of waiting for monitor progress.
+enum MonitorWait {
+    Callback(u64),
+    Shutdown,
+    Timeout,
+}
+
+#[cfg(feature = "cpal-backend")]
+impl MonitorSignals {
+    /// Creates an empty signal set with no callbacks and no shutdown request.
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(MonitorSignalsState::default()),
+            cv: Condvar::new(),
+        }
+    }
+
+    fn with_state<T>(&self, f: impl FnOnce(&mut MonitorSignalsState) -> T) -> T {
+        let mut guard = self.state.lock().unwrap_or_else(|poison| poison.into_inner());
+        f(&mut guard)
+    }
+
+    /// Returns true when host shutdown has been requested.
+    fn stop_requested(&self) -> bool {
+        self.with_state(|state| state.shutdown)
+    }
+
+    /// Requests monitor shutdown and wakes all waiters.
+    fn request_shutdown(&self) {
+        self.with_state(|state| {
+            state.shutdown = true;
+        });
+        self.cv.notify_all();
+    }
+
+    /// Reads the current callback epoch.
+    fn current_callback_epoch(&self) -> u64 {
+        self.with_state(|state| state.callback_epoch)
+    }
+
+    /// Publishes one callback event and wakes a waiting monitor.
+    fn note_callback(&self) {
+        self.with_state(|state| {
+            state.callback_epoch = state.callback_epoch.wrapping_add(1);
+        });
+        self.cv.notify_one();
+    }
+
+    /// Waits for shutdown for up to `timeout` and returns whether shutdown was requested.
+    fn wait_for_shutdown_or_timeout(&self, timeout: Duration) -> bool {
+        let guard = self.state.lock().unwrap_or_else(|poison| poison.into_inner());
+        if guard.shutdown {
+            return true;
+        }
+
+        let (guard, _) = self
+            .cv
+            .wait_timeout_while(guard, timeout, |state| !state.shutdown)
+            .unwrap_or_else(|poison| poison.into_inner());
+        guard.shutdown
+    }
+
+    /// Waits for either a callback newer than `since_epoch`, or a shutdown request.
+    ///
+    /// Returns `Timeout` when neither event is observed before `timeout`.
+    fn wait_for_callback_or_shutdown(&self, since_epoch: u64, timeout: Duration) -> MonitorWait {
+        let guard = self.state.lock().unwrap_or_else(|poison| poison.into_inner());
+        if guard.shutdown {
+            return MonitorWait::Shutdown;
+        }
+        if guard.callback_epoch != since_epoch {
+            return MonitorWait::Callback(guard.callback_epoch);
+        }
+
+        let (guard, timeout_result) = self
+            .cv
+            .wait_timeout_while(guard, timeout, |state| {
+                !state.shutdown && state.callback_epoch == since_epoch
+            })
+            .unwrap_or_else(|poison| poison.into_inner());
+
+        if guard.shutdown {
+            MonitorWait::Shutdown
+        } else if guard.callback_epoch != since_epoch {
+            MonitorWait::Callback(guard.callback_epoch)
+        } else if timeout_result.timed_out() {
+            MonitorWait::Timeout
+        } else {
+            MonitorWait::Timeout
+        }
+    }
+}
+
+#[cfg(feature = "cpal-backend")]
 impl AdaptiveMonitor {
     const FIRST_CALLBACK_TIMEOUT: Duration = Duration::from_secs(5);
     const NO_CALLBACK_SECS_THRESHOLD: u64 = 3;
     const RESTART_COOLDOWN: Duration = Duration::from_secs(5);
 
-    fn launch_session(&mut self, ready_tx: mpsc::Sender<()>) -> Option<cpal::Stream> {
+    /// Tries to build one audio output session, retrying once with default buffer size.
+    fn launch_session(&mut self) -> Option<cpal::Stream> {
         let mut stream = CpalHost::build_stream(
             &self.device,
             self.sample_format,
@@ -87,7 +203,7 @@ impl AdaptiveMonitor {
             &self.effects,
             self.initial_catchup_enabled,
             self.resampler_factory,
-            ready_tx.clone(),
+            Arc::clone(&self.signals),
         );
         if stream.is_none() && !matches!(self.stream_cfg.buffer_size, cpal::BufferSize::Default) {
             log::warn!("CPAL: retrying with default buffer_size");
@@ -103,7 +219,7 @@ impl AdaptiveMonitor {
                 &self.effects,
                 self.initial_catchup_enabled,
                 self.resampler_factory,
-                ready_tx,
+                Arc::clone(&self.signals),
             );
         }
         stream
@@ -116,22 +232,31 @@ impl AdaptiveMonitor {
         let mut first_session_ready = false;
 
         loop {
+            if self.signals.stop_requested() {
+                log::info!("CPAL: stop requested before starting session");
+                break;
+            }
+
+            // Session startup phase.
             self.runtime.set_audio_output_enabled(false);
             self.runtime.clear_pcm_buffer();
             log::info!("CPAL: starting audio session attempt");
 
-            let (session_ready_tx, session_ready_rx) = mpsc::channel();
-            let stream = match self.launch_session(session_ready_tx) {
+            let stream = match self.launch_session() {
                 Some(stream) => stream,
                 None => {
                     log::info!(
                         "CPAL: restart attempt deferred while building session; cooling down for {:?}",
                         Self::RESTART_COOLDOWN
                     );
-                    thread::sleep(Self::RESTART_COOLDOWN);
+                    if self.signals.wait_for_shutdown_or_timeout(Self::RESTART_COOLDOWN) {
+                        break;
+                    }
                     continue;
                 }
             };
+
+            let mut callback_epoch = self.signals.current_callback_epoch();
 
             if let Err(err) = stream.play() {
                 log::warn!("Unable to start CPAL output stream: {err}");
@@ -139,7 +264,9 @@ impl AdaptiveMonitor {
                     "CPAL: restart attempt deferred after play() failure; cooling down for {:?}",
                     Self::RESTART_COOLDOWN
                 );
-                thread::sleep(Self::RESTART_COOLDOWN);
+                if self.signals.wait_for_shutdown_or_timeout(Self::RESTART_COOLDOWN) {
+                    break;
+                }
                 continue;
             }
 
@@ -147,23 +274,39 @@ impl AdaptiveMonitor {
                 "CPAL: waiting for first callback (timeout {:?})",
                 Self::FIRST_CALLBACK_TIMEOUT
             );
-            if session_ready_rx
-                .recv_timeout(Self::FIRST_CALLBACK_TIMEOUT)
-                .is_err()
+
+            match self
+                .signals
+                .wait_for_callback_or_shutdown(callback_epoch, Self::FIRST_CALLBACK_TIMEOUT)
             {
-                log::warn!(
-                    "CPAL: no callback received within {:?}; restarting session",
-                    Self::FIRST_CALLBACK_TIMEOUT
-                );
-                drop(stream);
-                log::info!(
-                    "CPAL: restart attempt deferred after missing first callback; cooling down for {:?}",
-                    Self::RESTART_COOLDOWN
-                );
-                thread::sleep(Self::RESTART_COOLDOWN);
-                continue;
+                MonitorWait::Callback(next_epoch) => {
+                    callback_epoch = next_epoch;
+                    log::info!("CPAL: first host callback received");
+                }
+                MonitorWait::Shutdown => {
+                    log::info!("CPAL: stop requested while waiting for first callback");
+                    self.runtime.set_audio_output_enabled(false);
+                    drop(stream);
+                    break;
+                }
+                MonitorWait::Timeout => {
+                    log::warn!(
+                        "CPAL: no callback received within {:?}; restarting session",
+                        Self::FIRST_CALLBACK_TIMEOUT
+                    );
+                    drop(stream);
+                    log::info!(
+                        "CPAL: restart attempt deferred after missing first callback; cooling down for {:?}",
+                        Self::RESTART_COOLDOWN
+                    );
+                    if self.signals.wait_for_shutdown_or_timeout(Self::RESTART_COOLDOWN) {
+                        break;
+                    }
+                    continue;
+                }
             }
 
+            // Session active phase: monitor callback heartbeats until stall or shutdown.
             self.runtime.set_audio_output_enabled(true);
             CpalHost::update_soft_cap(&self.runtime);
             CpalHost::log_output_config(
@@ -178,40 +321,60 @@ impl AdaptiveMonitor {
             }
 
             let mut state = MonitorState {
-                last_callback_epoch: self.runtime.callback_heartbeat_epoch(),
+                last_callback_epoch: callback_epoch,
                 no_callback_seconds: 0,
             };
 
+            let mut shutdown_now = false;
+
             loop {
-                thread::sleep(Duration::from_secs(1));
-                let current = self.runtime.callback_heartbeat_epoch();
-                if current == state.last_callback_epoch {
-                    state.no_callback_seconds = state.no_callback_seconds.saturating_add(1);
-                    if state.no_callback_seconds >= Self::NO_CALLBACK_SECS_THRESHOLD {
-                        log::warn!(
-                            "CPAL output callback stopped for {}s; restarting audio session",
-                            state.no_callback_seconds
-                        );
-                        log::info!(
-                            "CPAL: restart attempt deferred after callback stall; cooling down for {:?}",
-                            Self::RESTART_COOLDOWN
-                        );
+                match self
+                    .signals
+                    .wait_for_callback_or_shutdown(state.last_callback_epoch, Duration::from_secs(1))
+                {
+                    MonitorWait::Callback(next_epoch) => {
+                        state.last_callback_epoch = next_epoch;
+                        state.no_callback_seconds = 0;
+                    }
+                    MonitorWait::Shutdown => {
+                        shutdown_now = true;
                         break;
                     }
-                } else {
-                    state.last_callback_epoch = current;
-                    state.no_callback_seconds = 0;
+                    MonitorWait::Timeout => {
+                        state.no_callback_seconds = state.no_callback_seconds.saturating_add(1);
+                        if state.no_callback_seconds >= Self::NO_CALLBACK_SECS_THRESHOLD {
+                            log::warn!(
+                                "CPAL output callback stopped for {}s; restarting audio session",
+                                state.no_callback_seconds
+                            );
+                            log::info!(
+                                "CPAL: restart attempt deferred after callback stall; cooling down for {:?}",
+                                Self::RESTART_COOLDOWN
+                            );
+                            break;
+                        }
+                    }
                 }
             }
 
             self.runtime.set_audio_output_enabled(false);
             drop(stream);
+
+            if shutdown_now {
+                break;
+            }
+
             log::info!(
                 "CPAL: audio session closed; cooling down for {:?}",
                 Self::RESTART_COOLDOWN
             );
-            thread::sleep(Self::RESTART_COOLDOWN);
+            if self.signals.wait_for_shutdown_or_timeout(Self::RESTART_COOLDOWN) {
+                break;
+            }
         }
+
+        self.runtime.set_audio_output_enabled(false);
+        log::debug!("CPAL: monitor thread exiting");
     }
 }
 
@@ -228,7 +391,9 @@ impl CpalHost {
         #[cfg(feature = "cpal-backend")]
         let (ready_tx, ready_rx) = mpsc::channel();
         #[cfg(feature = "cpal-backend")]
-        let monitor = Self::start_stream(post_processor, config, ready_tx);
+        let signals = Arc::new(MonitorSignals::new());
+        #[cfg(feature = "cpal-backend")]
+        let monitor = Self::start_stream(post_processor, config, ready_tx, Arc::clone(&signals));
 
         #[cfg(not(feature = "cpal-backend"))]
         {
@@ -246,6 +411,7 @@ impl CpalHost {
             return Self {
                 _monitor: monitor,
                 ready_rx: Some(ready_rx),
+                signals,
             };
         }
     }
@@ -271,6 +437,7 @@ impl CpalHost {
         post_processor: AudioPostProcessor,
         mut config: AudioPostProcessConfig,
         ready_tx: mpsc::Sender<()>,
+        signals: Arc<MonitorSignals>,
     ) -> Option<std::thread::JoinHandle<()>> {
         use cpal::traits::{DeviceTrait, HostTrait};
 
@@ -323,6 +490,7 @@ impl CpalHost {
             initial_catchup_enabled,
             resampler_factory,
             ready_tx,
+            signals,
         );
 
         Some(monitor)
@@ -364,7 +532,7 @@ impl CpalHost {
         effects: &AudioEffectChain,
         initial_catchup_enabled: bool,
         resampler_factory: PostResamplerFactory,
-        ready_tx: mpsc::Sender<()>,
+        signals: Arc<MonitorSignals>,
     ) -> Option<cpal::Stream> {
         use cpal::SampleFormat;
         use cpal::traits::DeviceTrait;
@@ -389,16 +557,13 @@ impl CpalHost {
                     resampler_factory,
                 );
                 let callback_runtime = post_processor.shared_data_plane();
-                let callback_ready = Arc::new(AtomicBool::new(false));
+                let callback_signals = Arc::clone(&signals);
                 let config = config.clone();
-                let ready_tx = ready_tx.clone();
                 match device.build_output_stream(
                     stream_cfg,
                     move |data: &mut [f32], _| {
                         callback_runtime.note_callback_activity();
-                        if !callback_ready.swap(true, Ordering::Relaxed) {
-                            let _ = ready_tx.send(());
-                        }
+                        callback_signals.note_callback();
                         Self::fill_output_f32(data, channels, &mut post_processor, &config);
                     },
                     err_fn,
@@ -420,17 +585,14 @@ impl CpalHost {
                     resampler_factory,
                 );
                 let callback_runtime = post_processor.shared_data_plane();
-                let callback_ready = Arc::new(AtomicBool::new(false));
+                let callback_signals = Arc::clone(&signals);
                 let config = config.clone();
-                let ready_tx = ready_tx.clone();
                 let mut scratch: Vec<f32> = Vec::new();
                 match device.build_output_stream(
                     stream_cfg,
                     move |data: &mut [i16], _| {
                         callback_runtime.note_callback_activity();
-                        if !callback_ready.swap(true, Ordering::Relaxed) {
-                            let _ = ready_tx.send(());
-                        }
+                        callback_signals.note_callback();
                         Self::fill_output_i16(
                             data,
                             channels,
@@ -458,17 +620,14 @@ impl CpalHost {
                     resampler_factory,
                 );
                 let callback_runtime = post_processor.shared_data_plane();
-                let callback_ready = Arc::new(AtomicBool::new(false));
+                let callback_signals = Arc::clone(&signals);
                 let config = config.clone();
-                let ready_tx = ready_tx.clone();
                 let mut scratch: Vec<f32> = Vec::new();
                 match device.build_output_stream(
                     stream_cfg,
                     move |data: &mut [u16], _| {
                         callback_runtime.note_callback_activity();
-                        if !callback_ready.swap(true, Ordering::Relaxed) {
-                            let _ = ready_tx.send(());
-                        }
+                        callback_signals.note_callback();
                         Self::fill_output_u16(
                             data,
                             channels,
@@ -549,6 +708,7 @@ impl CpalHost {
         initial_catchup_enabled: bool,
         resampler_factory: PostResamplerFactory,
         ready_tx: mpsc::Sender<()>,
+        signals: Arc<MonitorSignals>,
     ) -> std::thread::JoinHandle<()> {
         let monitor = AdaptiveMonitor {
             device,
@@ -560,6 +720,7 @@ impl CpalHost {
             effects,
             initial_catchup_enabled,
             resampler_factory,
+            signals,
         };
 
         thread::spawn(move || monitor.run(ready_tx))
@@ -670,9 +831,12 @@ impl CpalHost {
 impl Drop for CpalHost {
     fn drop(&mut self) {
         #[cfg(feature = "cpal-backend")]
-        if let Some(monitor) = self._monitor.take() {
-            monitor.thread().unpark();
-            let _ = monitor.join();
+        {
+            self.signals.request_shutdown();
+            if let Some(monitor) = self._monitor.take() {
+                monitor.thread().unpark();
+                let _ = monitor.join();
+            }
         }
     }
 }
