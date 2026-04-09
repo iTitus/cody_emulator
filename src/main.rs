@@ -54,6 +54,10 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = AudioLatencyPreset::Default)]
     audio_latency: AudioLatencyPreset,
 
+    /// Disable initial catch-up sensitivity heuristic for audio buffering.
+    #[arg(long, default_value_t = false)]
+    audio_no_initial_catchup: bool,
+
     /// Each time this option is added increases the default logging level
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -109,6 +113,7 @@ pub fn main() {
         cli.physical_keyboard,
         cli.fast,
         cli.audio_latency.buffer_frames(),
+        cli.audio_no_initial_catchup,
     );
 }
 

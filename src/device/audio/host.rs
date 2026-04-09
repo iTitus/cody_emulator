@@ -4,9 +4,14 @@
 //! output stream when the `cpal-backend` feature is enabled.
 
 use crate::device::audio::engine::SharedAudioDataPlane;
-use crate::device::audio::postprocess::{AudioEffectChain, AudioPostProcessConfig, AudioPostProcessor};
+use crate::device::audio::postprocess::{
+    AudioEffectChain, AudioPostProcessConfig, AudioPostProcessor,
+};
 use std::sync::mpsc;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread;
 use std::time::Duration;
 
@@ -29,6 +34,7 @@ struct AdaptiveMonitor {
     runtime: SharedAudioDataPlane,
     synth_sample_rate: u32,
     effects: AudioEffectChain,
+    initial_catchup_enabled: bool,
 }
 
 #[cfg(feature = "cpal-backend")]
@@ -53,6 +59,7 @@ impl AdaptiveMonitor {
             self.synth_sample_rate,
             self.config.channels.max(1),
             &self.effects,
+            self.initial_catchup_enabled,
             ready_tx.clone(),
         );
         if stream.is_none() && !matches!(self.stream_cfg.buffer_size, cpal::BufferSize::Default) {
@@ -67,6 +74,7 @@ impl AdaptiveMonitor {
                 self.synth_sample_rate,
                 self.config.channels.max(1),
                 &self.effects,
+                self.initial_catchup_enabled,
                 ready_tx,
             );
         }
@@ -197,7 +205,9 @@ impl CpalHost {
         #[cfg(not(feature = "cpal-backend"))]
         {
             let _ = config;
-            log::info!("CPAL backend disabled; build with feature 'cpal-backend' to enable audio output stream");
+            log::info!(
+                "CPAL backend disabled; build with feature 'cpal-backend' to enable audio output stream"
+            );
             return Self {
                 _post_processor: post_processor,
             };
@@ -260,7 +270,10 @@ impl CpalHost {
             stream_cfg.buffer_size = buffer_size;
             log::info!("CPAL: using buffer_size={buffer_size:?}");
         } else {
-            log::info!("CPAL: using default buffer_size={:?}", stream_cfg.buffer_size);
+            log::info!(
+                "CPAL: using default buffer_size={:?}",
+                stream_cfg.buffer_size
+            );
         }
         config.sample_rate_hz = stream_cfg.sample_rate.0;
         config.channels = stream_cfg.channels as usize;
@@ -268,6 +281,7 @@ impl CpalHost {
         let runtime = post_processor.shared_data_plane();
         let synth_sample_rate = post_processor.synth_sample_rate();
         let effects = post_processor.effect_chain();
+        let initial_catchup_enabled = post_processor.initial_catchup_enabled();
         Self::update_soft_cap(&runtime);
         let monitor = Self::spawn_adaptive_monitor(
             device,
@@ -277,6 +291,7 @@ impl CpalHost {
             runtime,
             synth_sample_rate,
             effects,
+            initial_catchup_enabled,
             ready_tx,
         );
 
@@ -288,8 +303,10 @@ impl CpalHost {
         runtime: SharedAudioDataPlane,
         synth_sample_rate: u32,
         effects: &AudioEffectChain,
+        initial_catchup_enabled: bool,
     ) -> AudioPostProcessor {
         let mut post_processor = AudioPostProcessor::new(runtime, synth_sample_rate);
+        post_processor.set_initial_catchup_enabled(initial_catchup_enabled);
         if !effects.pre.is_empty() {
             post_processor.set_pre_effects(effects.pre.clone());
         }
@@ -310,6 +327,7 @@ impl CpalHost {
         synth_sample_rate: u32,
         channels: usize,
         effects: &AudioEffectChain,
+        initial_catchup_enabled: bool,
         ready_tx: mpsc::Sender<()>,
     ) -> Option<cpal::Stream> {
         use cpal::SampleFormat;
@@ -327,7 +345,12 @@ impl CpalHost {
 
         match sample_format {
             SampleFormat::F32 => {
-                let mut post_processor = Self::build_post_processor(runtime, synth_sample_rate, effects);
+                let mut post_processor = Self::build_post_processor(
+                    runtime,
+                    synth_sample_rate,
+                    effects,
+                    initial_catchup_enabled,
+                );
                 let callback_runtime = post_processor.shared_data_plane();
                 let callback_ready = Arc::new(AtomicBool::new(false));
                 let config = config.clone();
@@ -352,7 +375,12 @@ impl CpalHost {
                 }
             }
             SampleFormat::I16 => {
-                let mut post_processor = Self::build_post_processor(runtime, synth_sample_rate, effects);
+                let mut post_processor = Self::build_post_processor(
+                    runtime,
+                    synth_sample_rate,
+                    effects,
+                    initial_catchup_enabled,
+                );
                 let callback_runtime = post_processor.shared_data_plane();
                 let callback_ready = Arc::new(AtomicBool::new(false));
                 let config = config.clone();
@@ -384,7 +412,12 @@ impl CpalHost {
                 }
             }
             SampleFormat::U16 => {
-                let mut post_processor = Self::build_post_processor(runtime, synth_sample_rate, effects);
+                let mut post_processor = Self::build_post_processor(
+                    runtime,
+                    synth_sample_rate,
+                    effects,
+                    initial_catchup_enabled,
+                );
                 let callback_runtime = post_processor.shared_data_plane();
                 let callback_ready = Arc::new(AtomicBool::new(false));
                 let config = config.clone();
@@ -474,6 +507,7 @@ impl CpalHost {
         runtime: SharedAudioDataPlane,
         synth_sample_rate: u32,
         effects: AudioEffectChain,
+        initial_catchup_enabled: bool,
         ready_tx: mpsc::Sender<()>,
     ) -> std::thread::JoinHandle<()> {
         let monitor = AdaptiveMonitor {
@@ -484,6 +518,7 @@ impl CpalHost {
             runtime,
             synth_sample_rate,
             effects,
+            initial_catchup_enabled,
         };
 
         thread::spawn(move || monitor.run(ready_tx))

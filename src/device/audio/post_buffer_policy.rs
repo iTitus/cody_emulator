@@ -51,7 +51,9 @@ struct BufferPolicyStats {
     catchup_credit: f64,
     catchup_last: Instant,
     start_instant: Instant,
+    initial_gate_open: bool,
     one_shot_catchup_done: bool,
+    one_shot_catchup_forced_off: bool,
 }
 
 /// Buffer management helper used by the postprocessor.
@@ -59,6 +61,7 @@ struct BufferPolicyStats {
 pub struct BufferPolicyManager {
     buffer_state: BufferState,
     stats: BufferPolicyStats,
+    initial_catchup_enabled: bool,
 }
 
 impl BufferPolicyManager {
@@ -71,9 +74,33 @@ impl BufferPolicyManager {
                 catchup_credit: 0.0,
                 catchup_last: now,
                 start_instant: now,
+                initial_gate_open: false,
                 one_shot_catchup_done: false,
+                one_shot_catchup_forced_off: false,
             },
+            initial_catchup_enabled: true,
         }
+    }
+
+    /// Enables or disables the initial catch-up sensitivity heuristic.
+    pub fn set_initial_catchup_enabled(&mut self, enabled: bool) {
+        if self.initial_catchup_enabled == enabled {
+            return;
+        }
+
+        self.initial_catchup_enabled = enabled;
+        if !enabled {
+            self.stats.one_shot_catchup_forced_off = !self.stats.one_shot_catchup_done;
+            self.stats.one_shot_catchup_done = true;
+        } else if self.stats.one_shot_catchup_forced_off {
+            self.stats.one_shot_catchup_done = false;
+            self.stats.one_shot_catchup_forced_off = false;
+        }
+    }
+
+    /// Returns whether initial catch-up sensitivity is enabled.
+    pub fn initial_catchup_enabled(&self) -> bool {
+        self.initial_catchup_enabled
     }
 
     /// Returns the current buffer management state.
@@ -134,7 +161,10 @@ impl BufferPolicyManager {
         if soft_cap_samples == 0 {
             soft_cap_samples = wanted_len.saturating_mul(4);
         } else {
-            log::trace!("Audio postprocess: using soft cap {} samples", soft_cap_samples);
+            log::trace!(
+                "Audio postprocess: using soft cap {} samples",
+                soft_cap_samples
+            );
         }
         let buffered_samples = runtime.pcm_len();
         let frame_samples = synth_sample_rate.saturating_div(60).max(1) as usize;
@@ -188,23 +218,37 @@ impl BufferPolicyManager {
 
     /// Chooses the next state and whether one-shot catchup is still active.
     fn select_buffer_state(&mut self, bounds: &BufferBounds, now: Instant) -> (BufferState, bool) {
-        let startup_ready =
-            now.saturating_duration_since(self.stats.start_instant) >= Duration::from_secs(1);
-        if startup_ready
+        if !self.stats.initial_gate_open
+            && now.saturating_duration_since(self.stats.start_instant) >= Duration::from_secs(1)
+        {
+            self.stats.initial_gate_open = true;
+        }
+
+        if self.stats.initial_gate_open
             && !self.stats.one_shot_catchup_done
             && bounds.buffered_samples <= bounds.target_buffer_samples
         {
             self.stats.one_shot_catchup_done = true;
+            self.stats.one_shot_catchup_forced_off = false;
         }
-        let one_shot_catchup_active = startup_ready
-            && !self.stats.one_shot_catchup_done
-            && bounds.buffered_samples > bounds.target_buffer_samples;
-        let catchup_requested = if self.buffer_state == BufferState::Catchup {
-            bounds.buffered_samples > bounds.target_buffer_samples
-        } else {
-            (bounds.buffered_samples > bounds.drift_guard_samples && !bounds.over_soft_cap)
-                || one_shot_catchup_active
-        };
+
+        let one_shot_catchup_active = self.initial_catchup_enabled
+            && self.stats.initial_gate_open
+            && !self.stats.one_shot_catchup_done;
+
+        let drift_guard = bounds.drift_guard_samples.max(bounds.target_buffer_samples);
+        let one_shot_threshold = bounds.target_buffer_samples
+            + drift_guard.saturating_sub(bounds.target_buffer_samples) / 2;
+
+        let catchup_requested = self.stats.initial_gate_open
+            && !bounds.over_soft_cap
+            && if self.buffer_state == BufferState::Catchup {
+                bounds.buffered_samples > bounds.target_buffer_samples
+            } else if one_shot_catchup_active {
+                bounds.buffered_samples > one_shot_threshold
+            } else {
+                bounds.buffered_samples > drift_guard
+            };
 
         let next_state = if bounds.over_soft_cap {
             BufferState::Overrun
@@ -299,12 +343,16 @@ impl BufferPolicyManager {
                     let post_skip = runtime.pcm_len();
                     if one_shot_catchup_active && post_skip <= bounds.target_buffer_samples {
                         self.stats.one_shot_catchup_done = true;
+                        self.stats.one_shot_catchup_forced_off = false;
                     }
                 }
                 let post_skip = runtime.pcm_len();
                 if post_skip > bounds.soft_cap_samples {
                     let clamp = post_skip - bounds.soft_cap_samples;
-                    log::warn!("Audio postprocess: CLAMP after catchup, dropping {} samples", clamp);
+                    log::warn!(
+                        "Audio postprocess: CLAMP after catchup, dropping {} samples",
+                        clamp
+                    );
                     for _ in 0..clamp {
                         runtime.pop_pcm_front();
                     }
@@ -331,7 +379,10 @@ impl BufferPolicyManager {
                 let post_skip = runtime.pcm_len();
                 if post_skip > bounds.soft_cap_samples {
                     let clamp = post_skip - bounds.soft_cap_samples;
-                    log::warn!("Audio postprocess: CLAMP after overrun, dropping {} samples", clamp);
+                    log::warn!(
+                        "Audio postprocess: CLAMP after overrun, dropping {} samples",
+                        clamp
+                    );
                     for _ in 0..clamp {
                         runtime.pop_pcm_front();
                     }

@@ -572,6 +572,21 @@ fn policy_normal_when_buffered_within_target() {
 }
 
 #[test]
+fn policy_reenable_initial_catchup_restores_first_trigger_sensitivity() {
+    // With synth_sample_rate=60 and wanted_len=1:
+    // target=128, drift_guard=129, first-trigger threshold=128.
+    // buffered=129 should trigger catchup only when the one-shot sensitivity is active.
+    let mut host = build_policy_host(128, 1024, 129, 60);
+    host.set_initial_catchup_enabled(false);
+    host.set_initial_catchup_enabled(true);
+
+    std::thread::sleep(Duration::from_millis(1100));
+
+    let next_state = host.preview_buffer_state(1);
+    assert!(matches!(next_state, BufferState::Catchup));
+}
+
+#[test]
 fn host_softclip_bounds_output() {
     let runtime = Arc::new(AudioDataPlane::new(64));
     runtime.push_pcm_samples(&[4.0, -4.0, 4.0, -4.0]);

@@ -43,6 +43,7 @@ pub fn start(
     physical_keyboard: bool,
     fast: bool,
     audio_buffer_frames: u32,
+    audio_no_initial_catchup: bool,
 ) {
     let path = path.as_ref();
     info!(
@@ -184,7 +185,10 @@ pub fn start(
     );
     memory.add_memory(UART2_BASE, UART_END, uart2);
 
-    let pipeline = create_audio_pipeline();
+    let mut pipeline = create_audio_pipeline();
+    pipeline
+        .post
+        .set_initial_catchup_enabled(!audio_no_initial_catchup);
     let audio = Rc::new(RefCell::new(pipeline.mmio));
     let mut audio_host = CpalHost::new(
         pipeline.post,
