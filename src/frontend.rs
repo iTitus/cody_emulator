@@ -42,6 +42,7 @@ pub fn start(
     fast: bool,
     audio_buffer_frames: u32,
     audio_no_initial_catchup: bool,
+    audio_resampler_fast: bool,
     audio_off: bool,
 ) {
     let path = path.as_ref();
@@ -187,6 +188,7 @@ pub fn start(
     let frontend_audio = create_frontend_audio(FrontendAudioOptions {
         audio_off,
         audio_no_initial_catchup,
+        audio_resampler_fast,
         audio_buffer_frames,
     });
     let audio = Rc::new(RefCell::new(frontend_audio.mmio));

@@ -10,7 +10,7 @@ use crate::device::audio::fx::{GainEffect, OnePoleHighPassEffect, SoftClipEffect
 use crate::device::audio::host::{CpalHost, StubHost};
 use crate::device::audio::mmiodev::AudioMmioDevice;
 use crate::device::audio::postprocess::{AudioPostProcessConfig, AudioPostProcessor};
-use crate::device::audio::post_resampler::{CubicResampler, PostResampler};
+use crate::device::audio::post_resampler::{CubicResampler, LinearResampler, PostResampler};
 use crate::device::audio::queue::{new_dummy_pcm_buffer, new_pcm_buffer};
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,6 +32,7 @@ pub struct AudioPipeline {
 pub struct FrontendAudioOptions {
     pub audio_off: bool,
     pub audio_no_initial_catchup: bool,
+    pub audio_resampler_fast: bool,
     pub audio_buffer_frames: u32,
 }
 
@@ -79,6 +80,10 @@ fn apply_default_effects(post: &mut AudioPostProcessor) {
 
 fn default_post_resampler() -> Box<dyn PostResampler> {
     Box::new(CubicResampler::new())
+}
+
+fn fast_post_resampler() -> Box<dyn PostResampler> {
+    Box::new(LinearResampler::new())
 }
 
 /// Creates an MMIO audio device using the default timing/profile.
@@ -177,7 +182,11 @@ pub fn create_audio_pipeline(audio_off: bool) -> AudioPipeline {
 
 /// Builds full frontend audio (MMIO + host) from startup options.
 pub fn create_frontend_audio(options: FrontendAudioOptions) -> FrontendAudio {
-    let mut pipeline = create_audio_pipeline(options.audio_off);
+    let mut pipeline = if options.audio_resampler_fast {
+        create_audio_pipeline_with_resampler_factory(options.audio_off, fast_post_resampler)
+    } else {
+        create_audio_pipeline_with_resampler_factory(options.audio_off, default_post_resampler)
+    };
     pipeline
         .post
         .set_initial_catchup_enabled(!options.audio_no_initial_catchup);
@@ -201,6 +210,32 @@ pub fn create_frontend_audio(options: FrontendAudioOptions) -> FrontendAudio {
         mmio: pipeline.mmio,
         host,
     }
+}
+
+fn create_audio_pipeline_with_resampler_factory(
+    audio_off: bool,
+    resampler_factory: fn() -> Box<dyn PostResampler>,
+) -> AudioPipeline {
+    let pcm_queue_kind = if audio_off {
+        PcmQueueKind::Dummy
+    } else {
+        PcmQueueKind::Real
+    };
+    let config = default_audio_config();
+    let core = create_audio_core_with_queue_kind(
+        config,
+        DEFAULT_PCM_CAPACITY,
+        DEFAULT_WRITE_QUEUE_CAPACITY,
+        pcm_queue_kind,
+    );
+    let mmio = AudioMmioDevice::from_core(core);
+    let mut post = AudioPostProcessor::new_with_resampler_factory(
+        mmio.shared_data_plane(),
+        mmio.synth_sample_rate(),
+        resampler_factory,
+    );
+    apply_default_effects(&mut post);
+    AudioPipeline { mmio, post }
 }
 
 /// Builds an audio pipeline with explicit timing parameters.

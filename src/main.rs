@@ -58,6 +58,11 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     audio_no_initial_catchup: bool,
 
+    /// Use the lightweight linear output resampler instead of the default cubic resampler.
+    #[arg(long, default_value_t = false)]
+    audio_resampler_fast: bool,
+
+    /// Disable audio output (but keep the audio engine running for authentic emulation of audio register behavior).
     #[arg(long, default_value_t = false)]
     audio_off: bool,
 
@@ -117,6 +122,7 @@ pub fn main() {
         cli.fast,
         cli.audio_latency.buffer_frames(),
         cli.audio_no_initial_catchup,
+        cli.audio_resampler_fast,
         cli.audio_off
     );
 }
