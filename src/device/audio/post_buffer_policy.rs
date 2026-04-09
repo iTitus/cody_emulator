@@ -204,7 +204,7 @@ impl BufferPolicyManager {
                 Notice for the interested reader about audio:
                 * BUFFER STATE changes indicate buffer management actions:
                     - Normal: Buffer is healthy; normal PCM output, no special handling.
-                    - Catchup: Buffer is above target; gradually skip old samples to catch up, with crossade.
+                    - Catchup: Buffer is above target; gradually skip old samples to catch up, with crossfade.
                     - Overrun, UnderrunShadow, UnderrunHold: Buffer is far above soft cap or underrun; aggressive actions taken to avoid latency or generate fallback audio.
                     If you see frequent or persistent Catchup/Overrun states, that may indicate performance issues or misconfigured latency targets.
                 * Occasional BUFFER STATE transitions are fine. Seeing one early during emulation is normal. The audio engine tries to reduce latency early that way.
