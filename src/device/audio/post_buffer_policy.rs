@@ -3,6 +3,7 @@
 use crate::device::audio::source::PcmSource;
 use std::sync::Once;
 use std::time::{Duration, Instant};
+use super::CONTACT;
 
 /// Unified buffer management state machine.
 ///
@@ -199,18 +200,16 @@ impl BufferPolicyManager {
         if next_state != self.buffer_state {
             static BUFFER_STATE_NOTICE: Once = Once::new();
             BUFFER_STATE_NOTICE.call_once(|| {
-                log::warn!(
-                    r#"Audio postprocess: Notice for the interested reader:
-BUFFER STATE changes indicate buffer management actions:
-- Normal: Buffer is healthy; normal PCM output, no special handling.
-- Catchup: Buffer is above target; gradually skip old samples to catch up, with crossade.
-- Overrun: Buffer is far above soft cap; drop old samples aggressively to avoid latency runaway.
-- UnderrunShadow: Buffer underrun; synth snapshot is used to generate fallback audio.
-- UnderrunHold: Buffer underrun and no snapshot; hold last sample (audio freeze).
-If you see frequent or persistent Catchup/Overrun states, that may indicate performance issues or misconfigured latency targets.
-Occasional transitions are fine. Seeing one early during emulation is normal. The audio engine tries to reduce latency early that way.
-"#
-                );
+                log::warn!(r#"Audio:
+                Notice for the interested reader about audio:
+                * BUFFER STATE changes indicate buffer management actions:
+                    - Normal: Buffer is healthy; normal PCM output, no special handling.
+                    - Catchup: Buffer is above target; gradually skip old samples to catch up, with crossade.
+                    - Overrun, UnderrunShadow, UnderrunHold: Buffer is far above soft cap or underrun; aggressive actions taken to avoid latency or generate fallback audio.
+                    If you see frequent or persistent Catchup/Overrun states, that may indicate performance issues or misconfigured latency targets.
+                * Occasional BUFFER STATE transitions are fine. Seeing one early during emulation is normal. The audio engine tries to reduce latency early that way.
+                * If you find some weird audio behaviour, contact the author of the emulator or, even better, of the audio subsystem ({CONTACT}).
+                * To disable audio entirely, pass --audio-off. For more options, see --help."#);
             });
             log::warn!(
                 "Audio postprocess: BUFFER STATE CHANGE {:?} -> {:?} (buffered={}, configured_latency={}, target_buffer={}, drift_guard={}, soft_cap={})",

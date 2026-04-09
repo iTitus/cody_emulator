@@ -58,6 +58,9 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     audio_no_initial_catchup: bool,
 
+    #[arg(long, default_value_t = false)]
+    audio_off: bool,
+
     /// Each time this option is added increases the default logging level
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -114,6 +117,7 @@ pub fn main() {
         cli.fast,
         cli.audio_latency.buffer_frames(),
         cli.audio_no_initial_catchup,
+        cli.audio_off
     );
 }
 

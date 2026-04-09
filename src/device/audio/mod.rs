@@ -36,6 +36,12 @@ impl AudioConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PcmQueueKind {
+    Real,
+    Dummy,
+}
+
 pub(crate) fn compute_soft_cap_samples(
     target_latency_samples: usize,
     staging_capacity_samples: usize,
@@ -52,9 +58,12 @@ pub(crate) fn compute_soft_cap_samples(
 
 pub use core::AudioCore;
 pub use factory::{
-    AudioPipeline, create_audio_core, create_audio_pipeline, create_audio_pipeline_with_timing,
+    AudioPipeline, FrontendAudio, FrontendAudioHost, FrontendAudioOptions, create_audio_core,
+    create_audio_pipeline, create_audio_pipeline_with_timing, create_frontend_audio,
 };
 pub use host::CpalHost;
 pub use mmiodev::{AUDIO_BASE, AUDIO_REGISTER_COUNT, AudioMmioDevice};
 pub use postprocess::{AudioPostProcessConfig, AudioPostProcessor};
 pub use registers::AudioRegister;
+
+pub const CONTACT: &str = "codystuff@blackasthesky.de";

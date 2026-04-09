@@ -39,6 +39,10 @@ pub fn new_pcm_buffer(capacity: usize) -> PcmBufferHandle {
     Arc::new(LockFreePcmRingBuffer::with_capacity(capacity))
 }
 
+pub fn new_dummy_pcm_buffer(capacity: usize) -> PcmBufferHandle {
+    Arc::new(DummyPcmBuffer::with_capacity(capacity))
+}
+
 /// A bounded lock-free queue that drops the oldest item on overflow.
 #[derive(Clone)]
 pub struct LockFreeQueue<T> {
@@ -245,5 +249,68 @@ impl PcmBuffer for LockFreePcmRingBuffer {
 
     fn underrun_samples(&self) -> u64 {
         LockFreePcmRingBuffer::underrun_samples(self)
+    }
+}
+
+/// A dummy PCM buffer that discards writes and always reads as empty.
+#[derive(Clone)]
+pub struct DummyPcmBuffer {
+    capacity: usize,
+    overrun_samples: Arc<AtomicU64>,
+    underrun_samples: Arc<AtomicU64>,
+}
+
+impl fmt::Debug for DummyPcmBuffer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DummyPcmBuffer")
+            .field("len", &0usize)
+            .field("capacity", &self.capacity)
+            .field("overrun_samples", &self.overrun_samples())
+            .field("underrun_samples", &self.underrun_samples())
+            .finish()
+    }
+}
+
+impl DummyPcmBuffer {
+    /// Creates a dummy PCM buffer with a logical capacity for diagnostics.
+    pub fn with_capacity(capacity: usize) -> Self {
+        assert!(capacity > 0, "capacity must be > 0");
+        Self {
+            capacity,
+            overrun_samples: Arc::new(AtomicU64::new(0)),
+            underrun_samples: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
+impl PcmBuffer for DummyPcmBuffer {
+    fn len(&self) -> usize {
+        0
+    }
+
+    fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    fn push_samples(&self, _samples: &[f32]) {}
+
+    fn pop_samples(&self, wanted: usize, out: &mut Vec<f32>) {
+        out.clear();
+        if wanted > 0 {
+            self.underrun_samples
+                .fetch_add(wanted as u64, Ordering::Relaxed);
+        }
+    }
+
+    fn pop_front(&self) {
+        self.underrun_samples.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn overrun_samples(&self) -> u64 {
+        self.overrun_samples.load(Ordering::Relaxed)
+    }
+
+    fn underrun_samples(&self) -> u64 {
+        self.underrun_samples.load(Ordering::Relaxed)
     }
 }

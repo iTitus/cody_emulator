@@ -5,6 +5,7 @@ use crate::device::audio::engine::{
     AudioControlPlane, AudioDataPlane, AudioEngine, AudioTiming, SharedAudioControlPlane,
     SharedAudioDataPlane,
 };
+use crate::device::audio::queue::PcmBufferHandle;
 use std::sync::Arc;
 
 /// Bundles the audio engine with its shared runtime and control plane.
@@ -18,8 +19,12 @@ pub struct AudioCore {
 
 impl AudioCore {
     /// Creates a new audio core with explicit buffering capacities.
-    pub fn new(config: AudioConfig, pcm_capacity: usize, write_queue_capacity: usize) -> Self {
-        let runtime = Arc::new(AudioDataPlane::new(pcm_capacity));
+    pub fn new(
+        config: AudioConfig,
+        pcm: PcmBufferHandle,
+        write_queue_capacity: usize,
+    ) -> Self {
+        let runtime = Arc::new(AudioDataPlane::new(pcm));
         let control_queues = Arc::new(AudioControlPlane::new(write_queue_capacity));
         let engine = AudioEngine::new(runtime.clone(), control_queues.clone(), config);
         let timing = AudioTiming::new(config);

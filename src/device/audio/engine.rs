@@ -260,6 +260,23 @@ impl AudioControlPlane {
 /// Shared lock-free control queue handle.
 pub type SharedAudioControlPlane = Arc<AudioControlPlane>;
 
+pub enum AudioDataPlaneInit {
+    Capacity(usize),
+    Buffer(PcmBufferHandle),
+}
+
+impl From<usize> for AudioDataPlaneInit {
+    fn from(value: usize) -> Self {
+        Self::Capacity(value)
+    }
+}
+
+impl From<PcmBufferHandle> for AudioDataPlaneInit {
+    fn from(value: PcmBufferHandle) -> Self {
+        Self::Buffer(value)
+    }
+}
+
 /// Shared runtime state exchanged between MMIO, engine, and postprocessor.
 pub struct AudioDataPlane {
     pcm: PcmBufferHandle,
@@ -297,10 +314,15 @@ struct AudioStats {
 
 impl AudioDataPlane {
     /// Creates shared data-plane storage for stream and snapshot state.
-    pub fn new(pcm_capacity: usize) -> Self {
+    pub fn new(init: impl Into<AudioDataPlaneInit>) -> Self {
         let now = Instant::now();
+        let pcm = match init.into() {
+            AudioDataPlaneInit::Capacity(capacity) => new_pcm_buffer(capacity),
+            AudioDataPlaneInit::Buffer(buffer) => buffer,
+        };
+
         Self {
-            pcm: new_pcm_buffer(pcm_capacity),
+            pcm,
             snapshot_synth_state: RwLock::new(None),
             snapshot_update_count: AtomicU64::new(0),
             dropped_stale_events: AtomicU64::new(0),
@@ -319,11 +341,12 @@ impl AudioDataPlane {
 
     /// Appends synthesized PCM samples into the shared stream buffer.
     pub fn push_pcm_samples(&self, samples: &[f32]) {
-        self.pcm.push_samples(samples);
         if !samples.is_empty() {
             self.total_samples_produced
                 .fetch_add(samples.len() as u64, Ordering::Relaxed);
         }
+
+        self.pcm.push_samples(samples);
     }
 
     /// Pops up to `wanted` PCM samples into `out`.

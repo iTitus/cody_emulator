@@ -15,6 +15,31 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
+/// Backend-free host that drains synth PCM without opening an output device.
+///
+/// This disables backend output entirely while intentionally skipping the
+/// postprocess render path (including resampling and output effects).
+pub struct StubHost;
+
+impl StubHost {
+    /// Creates a no-backend host used when audio output is explicitly disabled.
+    pub fn new(post_processor: AudioPostProcessor) -> Self {
+        let runtime = post_processor.shared_data_plane();
+        runtime.set_audio_output_enabled(false);
+
+        log::info!(
+            "Audio output disabled; using a stub host. The audio engine is not disabled by this."
+        );
+
+        Self
+    }
+
+    /// Stub host is ready immediately because no external device is required.
+    pub fn wait_ready(&mut self, _timeout: Duration) -> bool {
+        true
+    }
+}
+
 /// CPAL host wrapper that owns output stream lifetime.
 pub struct CpalHost {
     #[cfg(not(feature = "cpal-backend"))]
@@ -622,6 +647,16 @@ impl CpalHost {
             let s = sample.clamp(-1.0, 1.0);
             let mapped = (s * 0.5 + 0.5) * u16::MAX as f32;
             *dst = mapped.round() as u16;
+        }
+    }
+}
+
+impl Drop for CpalHost {
+    fn drop(&mut self) {
+        #[cfg(feature = "cpal-backend")]
+        if let Some(monitor) = self._monitor.take() {
+            monitor.thread().unpark();
+            let _ = monitor.join();
         }
     }
 }

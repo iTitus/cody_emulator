@@ -1,9 +1,7 @@
 use crate::cpu;
 use crate::cpu::Cpu;
-use crate::device::audio::factory::create_audio_pipeline;
-use crate::device::audio::host::CpalHost;
+use crate::device::audio::factory::{FrontendAudioHost, FrontendAudioOptions, create_frontend_audio};
 use crate::device::audio::mmiodev::{AudioMmioDevice, AUDIO_BASE, AUDIO_REGISTER_COUNT};
-use crate::device::audio::postprocess::AudioPostProcessConfig;
 use crate::device::blanking::BlankingRegister;
 use crate::device::keyboard::{Keyboard, KeyboardEmulation};
 use crate::device::uart::{UART_END, UART1_BASE, UART2_BASE, Uart, UartSource};
@@ -44,6 +42,7 @@ pub fn start(
     fast: bool,
     audio_buffer_frames: u32,
     audio_no_initial_catchup: bool,
+    audio_off: bool,
 ) {
     let path = path.as_ref();
     info!(
@@ -185,18 +184,13 @@ pub fn start(
     );
     memory.add_memory(UART2_BASE, UART_END, uart2);
 
-    let mut pipeline = create_audio_pipeline();
-    pipeline
-        .post
-        .set_initial_catchup_enabled(!audio_no_initial_catchup);
-    let audio = Rc::new(RefCell::new(pipeline.mmio));
-    let mut audio_host = CpalHost::new(
-        pipeline.post,
-        AudioPostProcessConfig {
-            preferred_output_buffer_frames: audio_buffer_frames,
-            ..AudioPostProcessConfig::default()
-        },
-    );
+    let frontend_audio = create_frontend_audio(FrontendAudioOptions {
+        audio_off,
+        audio_no_initial_catchup,
+        audio_buffer_frames,
+    });
+    let audio = Rc::new(RefCell::new(frontend_audio.mmio));
+    let mut audio_host = frontend_audio.host;
     if !audio_host.wait_ready(Duration::from_secs(3)) {
         info!("Audio output not ready yet; continuing startup");
     }
@@ -239,7 +233,7 @@ struct App<M> {
     keyboard: Keyboard,
     fast: bool,
     audio: Rc<RefCell<AudioMmioDevice>>,
-    _audio_host: CpalHost,
+    _audio_host: FrontendAudioHost,
     last_frame_start: Instant,
     stats_last: Instant,
     stats_cycles: u64,

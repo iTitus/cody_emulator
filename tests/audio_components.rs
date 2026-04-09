@@ -478,7 +478,8 @@ fn host_catchup_skips_when_buffered_over_drift_guard() {
         preferred_output_buffer_frames: 256,
     };
 
-    std::thread::sleep(Duration::from_millis(200));
+    // Catchup decisions are gated for ~1s after startup.
+    std::thread::sleep(Duration::from_millis(1100));
 
     let before = runtime.pcm_len();
     let mut out = vec![0.0; 1];
@@ -560,6 +561,8 @@ fn policy_overrun_when_buffered_exceeds_soft_cap() {
 #[test]
 fn policy_catchup_when_buffered_over_drift_guard() {
     let mut host = build_policy_host(128, 1024, 140, 60);
+    // Catchup decisions are gated for ~1s after startup.
+    std::thread::sleep(Duration::from_millis(1100));
     let next_state = host.preview_buffer_state(1);
     assert!(matches!(next_state, BufferState::Catchup));
 }

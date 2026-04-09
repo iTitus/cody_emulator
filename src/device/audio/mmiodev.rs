@@ -7,6 +7,9 @@
 use crate::device::audio::AudioConfig;
 use crate::device::audio::core::AudioCore;
 use crate::device::audio::engine::{AudioEvent, SharedAudioDataPlane};
+use crate::device::audio::factory::{
+    create_audio_mmio_device_default, create_audio_mmio_device_with_timing,
+};
 use crate::device::audio::registers::AudioRegister;
 use crate::interrupt::Interrupt;
 use crate::memory::Memory;
@@ -15,12 +18,6 @@ use crate::memory::Memory;
 pub const AUDIO_BASE: u16 = 0xD400;
 /// Number of exposed MMIO registers in the block.
 pub const AUDIO_REGISTER_COUNT: u16 = 0x20;
-
-const DEFAULT_PCM_CAPACITY: usize = 4096;
-const DEFAULT_WRITE_QUEUE_CAPACITY: usize = 8192;
-const DEFAULT_CPU_HZ: f64 = 1_000_000.0;
-const DEFAULT_SYNTH_SAMPLE_RATE: u32 = 16_000;
-const DEFAULT_TARGET_LATENCY_SAMPLES: u32 = 128; // 8ms of buffering @ 16kHz
 
 /// Memory-mapped audio device bridging CPU bus traffic and audio runtime.
 #[derive(Debug, Clone)]
@@ -32,31 +29,15 @@ pub struct AudioMmioDevice {
     last_env3: u8,
 }
 
-impl Default for AudioMmioDevice {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl AudioMmioDevice {
     /// Creates an MMIO audio device using default timing parameters.
     pub fn new() -> Self {
-        // Convert target latency from samples to cycles
-        let cycles_per_sample = DEFAULT_CPU_HZ / DEFAULT_SYNTH_SAMPLE_RATE as f64;
-        let target_latency_cycles = cycles_per_sample * DEFAULT_TARGET_LATENCY_SAMPLES as f64;
-        let config = AudioConfig::new(
-            DEFAULT_CPU_HZ,
-            DEFAULT_SYNTH_SAMPLE_RATE,
-            target_latency_cycles,
-        );
-        Self::with_timing(config)
+        create_audio_mmio_device_default()
     }
 
     /// Creates an MMIO audio device with explicit timing parameters.
-    /// target_latency_cycles: desired audio buffer latency in CPU cycles
     pub fn with_timing(config: AudioConfig) -> Self {
-        let core = AudioCore::new(config, DEFAULT_PCM_CAPACITY, DEFAULT_WRITE_QUEUE_CAPACITY);
-        Self::from_core(core)
+        create_audio_mmio_device_with_timing(config)
     }
 
     /// Creates a device from a prebuilt audio core.
