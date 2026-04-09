@@ -233,6 +233,10 @@ impl SidLikeSynth {
         let attack_step = envelope_step(ATTACK_TIMES_SEC[attack_nibble], sample_rate_hz);
         let decay_step = envelope_step(DECAY_RELEASE_TIMES_SEC[decay_nibble], sample_rate_hz);
         let release_step = envelope_step(DECAY_RELEASE_TIMES_SEC[release_nibble], sample_rate_hz);
+
+        // TODO(cody-fidelity): SPIN's sustain table at cody_audio.spin:596 appears to scale as
+        // MAXLEVEL * n (without /15), which likely collapses most sustain levels. Keep this
+        // normalized mapping for now; revisit for bit-faithful mode and potential upstream PR.
         let sustain_level = sustain_nibble as f32 / 15.0;
 
         match voice.env_phase {
