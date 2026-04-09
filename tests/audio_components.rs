@@ -60,6 +60,14 @@ fn configure_voice3_noise(synth: &mut SidLikeSynth) {
     synth.write_register(AudioRegister::V2Control.as_u8(), 0x80 | 0x01);
 }
 
+fn configure_voice3_saw_with_test(synth: &mut SidLikeSynth) {
+    synth.write_register(AudioRegister::V2FreqLo.as_u8(), 0xFF);
+    synth.write_register(AudioRegister::V2FreqHi.as_u8(), 0xFF);
+    synth.write_register(AudioRegister::V2Ad.as_u8(), 0x00);
+    synth.write_register(AudioRegister::V2Sr.as_u8(), 0xF0);
+    synth.write_register(AudioRegister::V2Control.as_u8(), 0x20 | 0x08 | 0x01);
+}
+
 #[test]
 fn audio_register_roundtrip_and_invalid_decode() {
     let reg = AudioRegister::from_u8(AudioRegister::V1PwHi.as_u8());
@@ -190,6 +198,21 @@ fn synth_noise_readback_uses_shared_lfsr_latching() {
 
     let _ = synth.render_sample(16_000);
     assert_eq!(synth.osc3_readback(), 0x71);
+}
+
+#[test]
+fn synth_test_bit_resets_phase_but_keeps_attack_step_readback() {
+    let mut synth = SidLikeSynth::new();
+    configure_voice3_saw_with_test(&mut synth);
+    synth.write_register(AudioRegister::FilterModeVolume.as_u8(), 0x0F);
+
+    let _ = synth.render_sample(16_000);
+    assert_eq!(synth.osc3_readback(), 0x00);
+    assert_eq!(synth.env3_readback(), 0x02);
+
+    let _ = synth.render_sample(16_000);
+    assert_eq!(synth.osc3_readback(), 0x00);
+    assert_eq!(synth.env3_readback(), 0x02);
 }
 
 #[test]
@@ -361,6 +384,55 @@ fn engine_noise_readback_uses_shared_lfsr_latching() {
 
     assert_eq!(first, 0x00);
     assert_eq!(second, 0x71);
+}
+
+#[test]
+fn engine_test_bit_resets_phase_but_keeps_attack_step_readback() {
+    let runtime = Arc::new(AudioDataPlane::new(512));
+    let control = Arc::new(AudioControlPlane::new(512));
+    let config = AudioConfig::new(1_000_000.0, 16_000, 256.0);
+    let mut engine = AudioEngine::new(Arc::clone(&runtime), Arc::clone(&control), config);
+
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2FreqLo.as_u8(),
+        value: 0xFF,
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2FreqHi.as_u8(),
+        value: 0xFF,
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2Ad.as_u8(),
+        value: 0x00,
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2Sr.as_u8(),
+        value: 0xF0,
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2Control.as_u8(),
+        value: 0x20 | 0x08 | 0x01, // saw + test + gate
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::FilterModeVolume.as_u8(),
+        value: 0x0F,
+    });
+
+    let first_osc = engine.resolve_readback_value(100, AudioRegister::Osc3Read.as_u8(), 100);
+    let first_env = engine.resolve_readback_value(100, AudioRegister::Env3Read.as_u8(), 100);
+    let second_osc = engine.resolve_readback_value(130, AudioRegister::Osc3Read.as_u8(), 130);
+    let second_env = engine.resolve_readback_value(130, AudioRegister::Env3Read.as_u8(), 130);
+
+    assert_eq!(first_osc, 0x00);
+    assert_eq!(first_env, 0x02);
+    assert_eq!(second_osc, 0x00);
+    assert_eq!(second_env, 0x02);
 }
 
 #[test]
@@ -867,6 +939,32 @@ fn mmio_noise_readback_uses_shared_lfsr_latching() {
 
     assert_eq!(first, 0x00);
     assert_eq!(second, 0x71);
+}
+
+#[test]
+fn mmio_test_bit_resets_phase_but_keeps_attack_step_readback() {
+    let config = AudioConfig::new(1_000_000.0, 16_000, 256.0);
+    let mut dev = AudioMmioDevice::with_timing(config);
+
+    dev.write_u8(AudioRegister::V2FreqLo.as_u8() as u16, 0xFF);
+    dev.write_u8(AudioRegister::V2FreqHi.as_u8() as u16, 0xFF);
+    dev.write_u8(AudioRegister::V2Ad.as_u8() as u16, 0x00);
+    dev.write_u8(AudioRegister::V2Sr.as_u8() as u16, 0xF0);
+    dev.write_u8(AudioRegister::V2Control.as_u8() as u16, 0x20 | 0x08 | 0x01);
+    dev.write_u8(AudioRegister::FilterModeVolume.as_u8() as u16, 0x0F);
+
+    let _ = dev.update(100);
+    let first_osc = dev.read_u8(AudioRegister::Osc3Read.as_u8() as u16);
+    let first_env = dev.read_u8(AudioRegister::Env3Read.as_u8() as u16);
+
+    let _ = dev.update(130);
+    let second_osc = dev.read_u8(AudioRegister::Osc3Read.as_u8() as u16);
+    let second_env = dev.read_u8(AudioRegister::Env3Read.as_u8() as u16);
+
+    assert_eq!(first_osc, 0x00);
+    assert_eq!(first_env, 0x02);
+    assert_eq!(second_osc, 0x00);
+    assert_eq!(second_env, 0x02);
 }
 
 #[test]

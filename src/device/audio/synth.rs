@@ -142,23 +142,21 @@ impl SidLikeSynth {
             let control = self.registers[base + 4];
             controls[i] = control;
 
-            if (control & CTRL_TEST) != 0 {
+            let is_test_mode = (control & CTRL_TEST) != 0;
+
+            if is_test_mode {
                 self.voices[i].phase = 0;
                 self.voices[i].envelope = 0.0;
                 self.voices[i].env_phase = EnvelopePhase::Release;
                 self.voices[i].last_gate = false;
-                if i == 2 {
-                    self.osc3_wave_readback = 0;
-                }
-                continue;
             }
 
             let freq = u16::from_le_bytes([self.registers[base], self.registers[base + 1]]);
-            let phase_increment = freq >> 2;
+            let phase_increment = if is_test_mode { 0 } else { freq >> 2 };
             let previous_phase = self.voices[i].phase;
             let new_phase = previous_phase.wrapping_add(phase_increment);
-            wrapped[i] = new_phase < previous_phase;
-            noise_clocked[i] = ((previous_phase ^ new_phase) & 0x4000) != 0;
+            wrapped[i] = !is_test_mode && new_phase < previous_phase;
+            noise_clocked[i] = !is_test_mode && ((previous_phase ^ new_phase) & 0x4000) != 0;
             self.voices[i].phase = new_phase;
 
             self.update_envelope(i, control, sample_rate_hz);
@@ -184,9 +182,6 @@ impl SidLikeSynth {
         for i in 0..VOICE_COUNT {
             let base = i * VOICE_STRIDE;
             let control = controls[i];
-            if (control & CTRL_TEST) != 0 {
-                continue;
-            }
 
             let mut wave_u16 = self.waveform_for_voice(i, control, base, noise_clocked[i]);
 
