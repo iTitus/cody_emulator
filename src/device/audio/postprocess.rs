@@ -9,11 +9,18 @@ pub use crate::device::audio::fx::{
     AudioEffect, DcBlockEffect, GainEffect, OnePoleHighPassEffect, OnePoleLowPassEffect,
     SoftClipEffect,
 };
+pub use crate::device::audio::post_resampler::PostResamplerFactory;
 use crate::device::audio::post_buffer_policy::{BufferPolicyManager, BufferState};
-use crate::device::audio::post_resampler::LinearResampler;
+use crate::device::audio::post_resampler::{
+    CubicResampler, PostResampler,
+};
 use crate::device::audio::synth::SidLikeSynth;
 use std::collections::VecDeque;
 use std::time::Duration;
+
+fn default_resampler_factory() -> Box<dyn PostResampler> {
+    Box::new(CubicResampler::new())
+}
 
 /// Runtime postprocessing and output format configuration.
 #[derive(Debug, Clone)]
@@ -42,15 +49,15 @@ pub struct AudioEffectChain {
 
 /// Resampling and effects pipeline for postprocessed audio.
 struct PostPipeline {
-    resampler: LinearResampler,
+    resampler: Box<dyn PostResampler>,
     effects: AudioEffectChain,
 }
 
 impl PostPipeline {
-    /// Creates a new pipeline with a linear resampler and empty effect chains.
-    fn new() -> Self {
+    /// Creates a new pipeline with a caller-supplied resampler and empty effect chains.
+    fn new(resampler_factory: PostResamplerFactory) -> Self {
         Self {
-            resampler: LinearResampler::new(),
+            resampler: resampler_factory(),
             effects: AudioEffectChain::default(),
         }
     }
@@ -363,6 +370,7 @@ impl SourceBuffer {
 pub struct AudioPostProcessor {
     runtime: SharedAudioDataPlane,
     synth_sample_rate: u32,
+    resampler_factory: PostResamplerFactory,
     buffer: SourceBuffer,
     pipeline: PostPipeline,
 }
@@ -370,17 +378,32 @@ pub struct AudioPostProcessor {
 impl AudioPostProcessor {
     /// Creates a postprocessor bound to a shared runtime and synth sample rate.
     pub fn new(runtime: SharedAudioDataPlane, synth_sample_rate: u32) -> Self {
+        Self::new_with_resampler_factory(runtime, synth_sample_rate, default_resampler_factory)
+    }
+
+    /// Creates a postprocessor with a caller-supplied resampler constructor.
+    pub fn new_with_resampler_factory(
+        runtime: SharedAudioDataPlane,
+        synth_sample_rate: u32,
+        resampler_factory: PostResamplerFactory,
+    ) -> Self {
         Self {
             runtime,
             synth_sample_rate: synth_sample_rate.max(1),
+            resampler_factory,
             buffer: SourceBuffer::new(),
-            pipeline: PostPipeline::new(),
+            pipeline: PostPipeline::new(resampler_factory),
         }
     }
 
     /// Returns the current buffer management state.
     pub fn buffer_state(&self) -> BufferState {
         self.buffer.buffer_state()
+    }
+
+    /// Returns the constructor used to create fresh resamplers for this postprocessor.
+    pub fn resampler_factory(&self) -> PostResamplerFactory {
+        self.resampler_factory
     }
 
     /// Enables or disables the initial catch-up sensitivity heuristic.

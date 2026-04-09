@@ -10,6 +10,7 @@ use crate::device::audio::fx::{GainEffect, OnePoleHighPassEffect, SoftClipEffect
 use crate::device::audio::host::{CpalHost, StubHost};
 use crate::device::audio::mmiodev::AudioMmioDevice;
 use crate::device::audio::postprocess::{AudioPostProcessConfig, AudioPostProcessor};
+use crate::device::audio::post_resampler::{CubicResampler, PostResampler};
 use crate::device::audio::queue::{new_dummy_pcm_buffer, new_pcm_buffer};
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,9 +70,15 @@ fn apply_default_effects(post: &mut AudioPostProcessor) {
     post.set_pre_effects(vec![
         Box::new(GainEffect::new(1.0)),
         Box::new(OnePoleHighPassEffect::new(40.0)),
-        Box::new(SoftClipEffect),
     ]);
-    post.set_post_effects(vec![Box::new(GainEffect::new(1.0)), Box::new(SoftClipEffect)]);
+    post.set_post_effects(vec![
+        Box::new(GainEffect::new(1.0)),
+        Box::new(SoftClipEffect)
+    ]);
+}
+
+fn default_post_resampler() -> Box<dyn PostResampler> {
+    Box::new(CubicResampler::new())
 }
 
 /// Creates an MMIO audio device using the default timing/profile.
@@ -159,7 +166,11 @@ pub fn create_audio_pipeline(audio_off: bool) -> AudioPipeline {
         pcm_queue_kind,
     );
     let mmio = AudioMmioDevice::from_core(core);
-    let mut post = AudioPostProcessor::new(mmio.shared_data_plane(), mmio.synth_sample_rate());
+    let mut post = AudioPostProcessor::new_with_resampler_factory(
+        mmio.shared_data_plane(),
+        mmio.synth_sample_rate(),
+        default_post_resampler,
+    );
     apply_default_effects(&mut post);
     AudioPipeline { mmio, post }
 }
@@ -221,7 +232,11 @@ pub fn create_audio_pipeline_with_timing_and_queue_kind(
         pcm_queue_kind,
     );
     let mmio = AudioMmioDevice::from_core(core);
-    let mut post = AudioPostProcessor::new(mmio.shared_data_plane(), mmio.synth_sample_rate());
+    let mut post = AudioPostProcessor::new_with_resampler_factory(
+        mmio.shared_data_plane(),
+        mmio.synth_sample_rate(),
+        default_post_resampler,
+    );
     apply_default_effects(&mut post);
     AudioPipeline { mmio, post }
 }

@@ -5,7 +5,7 @@
 
 use crate::device::audio::engine::SharedAudioDataPlane;
 use crate::device::audio::postprocess::{
-    AudioEffectChain, AudioPostProcessConfig, AudioPostProcessor,
+    AudioEffectChain, AudioPostProcessConfig, AudioPostProcessor, PostResamplerFactory,
 };
 use std::sync::mpsc;
 use std::sync::{
@@ -60,6 +60,7 @@ struct AdaptiveMonitor {
     synth_sample_rate: u32,
     effects: AudioEffectChain,
     initial_catchup_enabled: bool,
+    resampler_factory: PostResamplerFactory,
 }
 
 #[cfg(feature = "cpal-backend")]
@@ -85,6 +86,7 @@ impl AdaptiveMonitor {
             self.config.channels.max(1),
             &self.effects,
             self.initial_catchup_enabled,
+            self.resampler_factory,
             ready_tx.clone(),
         );
         if stream.is_none() && !matches!(self.stream_cfg.buffer_size, cpal::BufferSize::Default) {
@@ -100,6 +102,7 @@ impl AdaptiveMonitor {
                 self.config.channels.max(1),
                 &self.effects,
                 self.initial_catchup_enabled,
+                self.resampler_factory,
                 ready_tx,
             );
         }
@@ -307,6 +310,7 @@ impl CpalHost {
         let synth_sample_rate = post_processor.synth_sample_rate();
         let effects = post_processor.effect_chain();
         let initial_catchup_enabled = post_processor.initial_catchup_enabled();
+        let resampler_factory = post_processor.resampler_factory();
         Self::update_soft_cap(&runtime);
         let monitor = Self::spawn_adaptive_monitor(
             device,
@@ -317,6 +321,7 @@ impl CpalHost {
             synth_sample_rate,
             effects,
             initial_catchup_enabled,
+            resampler_factory,
             ready_tx,
         );
 
@@ -329,8 +334,13 @@ impl CpalHost {
         synth_sample_rate: u32,
         effects: &AudioEffectChain,
         initial_catchup_enabled: bool,
+        resampler_factory: PostResamplerFactory,
     ) -> AudioPostProcessor {
-        let mut post_processor = AudioPostProcessor::new(runtime, synth_sample_rate);
+        let mut post_processor = AudioPostProcessor::new_with_resampler_factory(
+            runtime,
+            synth_sample_rate,
+            resampler_factory,
+        );
         post_processor.set_initial_catchup_enabled(initial_catchup_enabled);
         if !effects.pre.is_empty() {
             post_processor.set_pre_effects(effects.pre.clone());
@@ -353,6 +363,7 @@ impl CpalHost {
         channels: usize,
         effects: &AudioEffectChain,
         initial_catchup_enabled: bool,
+        resampler_factory: PostResamplerFactory,
         ready_tx: mpsc::Sender<()>,
     ) -> Option<cpal::Stream> {
         use cpal::SampleFormat;
@@ -375,6 +386,7 @@ impl CpalHost {
                     synth_sample_rate,
                     effects,
                     initial_catchup_enabled,
+                    resampler_factory,
                 );
                 let callback_runtime = post_processor.shared_data_plane();
                 let callback_ready = Arc::new(AtomicBool::new(false));
@@ -405,6 +417,7 @@ impl CpalHost {
                     synth_sample_rate,
                     effects,
                     initial_catchup_enabled,
+                    resampler_factory,
                 );
                 let callback_runtime = post_processor.shared_data_plane();
                 let callback_ready = Arc::new(AtomicBool::new(false));
@@ -442,6 +455,7 @@ impl CpalHost {
                     synth_sample_rate,
                     effects,
                     initial_catchup_enabled,
+                    resampler_factory,
                 );
                 let callback_runtime = post_processor.shared_data_plane();
                 let callback_ready = Arc::new(AtomicBool::new(false));
@@ -533,6 +547,7 @@ impl CpalHost {
         synth_sample_rate: u32,
         effects: AudioEffectChain,
         initial_catchup_enabled: bool,
+        resampler_factory: PostResamplerFactory,
         ready_tx: mpsc::Sender<()>,
     ) -> std::thread::JoinHandle<()> {
         let monitor = AdaptiveMonitor {
@@ -544,6 +559,7 @@ impl CpalHost {
             synth_sample_rate,
             effects,
             initial_catchup_enabled,
+            resampler_factory,
         };
 
         thread::spawn(move || monitor.run(ready_tx))
