@@ -29,6 +29,7 @@ pub enum BufferState {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Internal struct for computing buffer thresholds and policy decisions.
 struct BufferBounds {
     configured_latency_samples: usize,
     soft_cap_samples: usize,
@@ -41,6 +42,7 @@ struct BufferBounds {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Internal struct for packaging buffer bounds and policy decisions together.
 struct BufferPolicy {
     bounds: BufferBounds,
     next_state: BufferState,
@@ -48,6 +50,7 @@ struct BufferPolicy {
 }
 
 #[derive(Debug, Clone)]
+/// Internal struct for tracking buffer policy state and timing for catch-up heuristics.
 struct BufferPolicyStats {
     catchup_credit: f64,
     catchup_last: Instant,

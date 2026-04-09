@@ -42,6 +42,7 @@ pub enum FrontendAudioHost {
     Stub(StubHost),
 }
 
+/// Frontend-facing audio bundle containing MMIO device and host.
 impl FrontendAudioHost {
     pub fn wait_ready(&mut self, timeout: Duration) -> bool {
         match self {
@@ -57,6 +58,7 @@ pub struct FrontendAudio {
     pub host: FrontendAudioHost,
 }
 
+/// Returns a default audio config based on the default CPU frequency, synth sample rate, and target latency.
 fn default_audio_config() -> AudioConfig {
     let cycles_per_sample = DEFAULT_CPU_HZ / DEFAULT_SYNTH_SAMPLE_RATE as f64;
     let target_latency_cycles = cycles_per_sample * DEFAULT_TARGET_LATENCY_SAMPLES as f64;
@@ -67,6 +69,7 @@ fn default_audio_config() -> AudioConfig {
     )
 }
 
+/// Applies a default set of audio effects to the given postprocessor.
 fn apply_default_effects(post: &mut AudioPostProcessor) {
     post.set_pre_effects(vec![
         Box::new(GainEffect::new(1.0)),
@@ -78,10 +81,12 @@ fn apply_default_effects(post: &mut AudioPostProcessor) {
     ]);
 }
 
+/// Factory function type for creating post-resamplers.
 fn default_post_resampler() -> Box<dyn PostResampler> {
     Box::new(CubicResampler::new())
 }
 
+/// Factory function for creating a fast (but lower quality) post-resampler.
 fn fast_post_resampler() -> Box<dyn PostResampler> {
     Box::new(LinearResampler::new())
 }
@@ -212,6 +217,7 @@ pub fn create_frontend_audio(options: FrontendAudioOptions) -> FrontendAudio {
     }
 }
 
+/// Builds an audio pipeline with a custom post-resampler factory.
 fn create_audio_pipeline_with_resampler_factory(
     audio_off: bool,
     resampler_factory: fn() -> Box<dyn PostResampler>,

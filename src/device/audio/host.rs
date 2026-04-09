@@ -185,6 +185,7 @@ impl MonitorSignals {
 }
 
 #[cfg(feature = "cpal-backend")]
+/// State for the adaptive monitor thread, which restarts the CPAL stream when callbacks stop.
 impl AdaptiveMonitor {
     const FIRST_CALLBACK_TIMEOUT: Duration = Duration::from_secs(5);
     const NO_CALLBACK_SECS_THRESHOLD: u64 = 3;
@@ -497,6 +498,7 @@ impl CpalHost {
     }
 
     #[cfg(feature = "cpal-backend")]
+    /// Builds and launches the CPAL output stream and monitor thread.
     fn build_post_processor(
         runtime: SharedAudioDataPlane,
         synth_sample_rate: u32,

@@ -8,6 +8,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Trait for a thread-safe event queue with fixed capacity and overrun tracking.
 pub trait EventQueue<T>: Send + Sync {
     fn capacity(&self) -> usize;
     fn len(&self) -> usize;
@@ -18,6 +19,7 @@ pub trait EventQueue<T>: Send + Sync {
     fn overrun_count(&self) -> u64;
 }
 
+/// Trait for a thread-safe PCM sample buffer with fixed capacity and overrun/underrun tracking.
 pub trait PcmBuffer: Send + Sync {
     fn len(&self) -> usize;
     fn capacity(&self) -> usize;
@@ -28,17 +30,22 @@ pub trait PcmBuffer: Send + Sync {
     fn underrun_samples(&self) -> u64;
 }
 
+/// Shared handle types for event queues and PCM buffers.
 pub type EventQueueHandle<T> = Arc<dyn EventQueue<T>>;
+/// Shared handle type for PCM buffers.
 pub type PcmBufferHandle = Arc<dyn PcmBuffer>;
 
+/// Factory methods for creating event queues and PCM buffers with specified capacities.
 pub fn new_event_queue<T: Send + Sync + 'static>(capacity: usize) -> EventQueueHandle<T> {
     Arc::new(LockFreeQueue::with_capacity(capacity))
 }
 
+/// Creates a real PCM buffer with the given capacity for actual audio processing.
 pub fn new_pcm_buffer(capacity: usize) -> PcmBufferHandle {
     Arc::new(LockFreePcmRingBuffer::with_capacity(capacity))
 }
 
+/// Creates a dummy PCM buffer that discards writes and always reads as empty, for testing or diagnostics.
 pub fn new_dummy_pcm_buffer(capacity: usize) -> PcmBufferHandle {
     Arc::new(DummyPcmBuffer::with_capacity(capacity))
 }

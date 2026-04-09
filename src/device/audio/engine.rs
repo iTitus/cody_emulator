@@ -26,6 +26,7 @@ pub struct AudioTiming {
     pub cpu_cycles_per_sample: f64,
 }
 
+/// Synth timing parameters derived from the runtime config.
 impl AudioTiming {
     /// Derives timing ratios and latency targets from the runtime config.
     pub fn new(config: AudioConfig) -> Self {
@@ -260,6 +261,7 @@ impl AudioControlPlane {
 /// Shared lock-free control queue handle.
 pub type SharedAudioControlPlane = Arc<AudioControlPlane>;
 
+/// Initialization options for the shared audio data plane.
 pub enum AudioDataPlaneInit {
     Capacity(usize),
     Buffer(PcmBufferHandle),
@@ -555,7 +557,7 @@ impl AudioDataPlane {
 /// Shared data-plane handle used across audio components.
 pub type SharedAudioDataPlane = Arc<AudioDataPlane>;
 
-/// Synth render engine that advances according to CPU cycle progression.
+/// Audio engine that applies register writes, renders PCM, and resolves readbacks.
 #[derive(Debug, Clone)]
 pub struct AudioEngine {
     runtime: SharedAudioDataPlane,

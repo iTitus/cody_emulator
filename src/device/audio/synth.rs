@@ -23,14 +23,20 @@ const CTRL_TRIANGLE: u8 = 0x10;
 const CTRL_SAW: u8 = 0x20;
 const CTRL_PULSE: u8 = 0x40;
 const CTRL_NOISE: u8 = 0x80;
+
+/// Taps for the 16-bit LFSR used in noise generation, corresponding to x^16 + x^14 + x^13 + x^11 + 1.
 const NOISE_TAPS: u16 = 0xB400;
+
+/// Maximum effective envelope level in 24-bit fixed point, used for readback scaling.
 const ENVELOPE_MAX_LEVEL_24: u32 = 0xFF_FFFF / 3;
 
+/// Internal per-voice state and synth logic for generating waveforms and envelopes according to control registers.
 const ATTACK_TIMES_SEC: [f32; 16] = [
     0.002, 0.008, 0.016, 0.024, 0.038, 0.056, 0.068, 0.080, 0.100, 0.250, 0.500, 0.800, 1.000,
     3.000, 5.000, 8.000,
 ];
 
+/// Decay and release times in seconds for each 4-bit rate value, used for envelope progression.
 const DECAY_RELEASE_TIMES_SEC: [f32; 16] = [
     0.006, 0.024, 0.048, 0.072, 0.114, 0.168, 0.204, 0.240, 0.300, 0.750, 1.500, 2.400, 3.000,
     9.000, 15.000, 24.000,
@@ -324,11 +330,13 @@ fn envelope_to_readback_u8(envelope: f32) -> u8 {
     (amplitude_24 >> 16) as u8
 }
 
+/// Advances the noise LFSR and returns the new value.
 fn advance_noise_lfsr(noise: u16) -> u16 {
     let feedback = if (noise & 1) != 0 { NOISE_TAPS } else { 0 };
     (noise >> 1) ^ feedback
 }
 
+/// Returns the modulator voice index for a given voice index, used for sync and ring modulation.
 fn modulator_index(voice_index: usize) -> usize {
     match voice_index {
         0 => 2,

@@ -26,6 +26,7 @@ pub struct AudioConfig {
     pub target_latency_cycles: f64,
 }
 
+/// Audio pipeline consisting of an MMIO device and a post-processor.
 impl AudioConfig {
     pub fn new(cpu_hz: f64, synth_sample_rate: u32, target_latency_cycles: f64) -> Self {
         Self {
