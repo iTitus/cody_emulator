@@ -29,7 +29,7 @@ pub enum BufferState {
 
 #[derive(Debug, Clone, Copy)]
 struct BufferBounds {
-    target_latency_samples: usize,
+    configured_latency_samples: usize,
     soft_cap_samples: usize,
     buffered_samples: usize,
     frame_samples: usize,
@@ -156,7 +156,7 @@ impl BufferPolicyManager {
         synth_sample_rate: u32,
         wanted_len: usize,
     ) -> BufferBounds {
-        let target_latency_samples = runtime.target_latency_samples();
+        let configured_latency_samples = runtime.target_latency_samples();
         let mut soft_cap_samples = runtime.pcm_soft_cap_samples();
         if soft_cap_samples == 0 {
             soft_cap_samples = wanted_len.saturating_mul(4);
@@ -168,22 +168,22 @@ impl BufferPolicyManager {
         }
         let buffered_samples = runtime.pcm_len();
         let frame_samples = synth_sample_rate.saturating_div(60).max(1) as usize;
-        let drift_guard_samples = if target_latency_samples > 0 {
-            let guard = target_latency_samples + frame_samples + frame_samples / 4;
+        let drift_guard_samples = if configured_latency_samples > 0 {
+            let guard = configured_latency_samples + frame_samples + frame_samples / 4;
             guard.max(wanted_len)
         } else {
             wanted_len
         };
         let over_soft_cap = buffered_samples > soft_cap_samples;
-        let target_buffer_samples = if target_latency_samples > 0 {
-            target_latency_samples.max(wanted_len)
+        let target_buffer_samples = if configured_latency_samples > 0 {
+            configured_latency_samples.max(wanted_len)
         } else {
             wanted_len
         };
         let max_crossfade_samples = frame_samples.saturating_div(2).max(64);
 
         BufferBounds {
-            target_latency_samples,
+            configured_latency_samples,
             soft_cap_samples,
             buffered_samples,
             frame_samples,
@@ -200,15 +200,24 @@ impl BufferPolicyManager {
             static BUFFER_STATE_NOTICE: Once = Once::new();
             BUFFER_STATE_NOTICE.call_once(|| {
                 log::warn!(
-                    "Audio postprocess: BUFFER STATE changes indicate buffer management actions; seeing one early during emulation is normal. The audio engine tries to reduce latency early that way."
+                    r#"Audio postprocess: Notice for the interested reader:
+BUFFER STATE changes indicate buffer management actions:
+- Normal: Buffer is healthy; normal PCM output, no special handling.
+- Catchup: Buffer is above target; gradually skip old samples to catch up, with crossade.
+- Overrun: Buffer is far above soft cap; drop old samples aggressively to avoid latency runaway.
+- UnderrunShadow: Buffer underrun; synth snapshot is used to generate fallback audio.
+- UnderrunHold: Buffer underrun and no snapshot; hold last sample (audio freeze).
+If you see frequent or persistent Catchup/Overrun states, that may indicate performance issues or misconfigured latency targets.
+Occasional transitions are fine. Seeing one early during emulation is normal. The audio engine tries to reduce latency early that way.
+"#
                 );
             });
             log::warn!(
-                "Audio postprocess: BUFFER STATE CHANGE {:?} -> {:?} (buffered={}, target_latency={}, target_buffer={}, drift_guard={}, soft_cap={})",
+                "Audio postprocess: BUFFER STATE CHANGE {:?} -> {:?} (buffered={}, configured_latency={}, target_buffer={}, drift_guard={}, soft_cap={})",
                 self.buffer_state,
                 next_state,
                 bounds.buffered_samples,
-                bounds.target_latency_samples,
+                bounds.configured_latency_samples,
                 bounds.target_buffer_samples,
                 bounds.drift_guard_samples,
                 bounds.soft_cap_samples
@@ -291,7 +300,7 @@ impl BufferPolicyManager {
         log::trace!(
             "Audio postprocess: refill bounds buffered={}, target_latency={}, target_buffer={}, drift_guard={}, soft_cap={}, state={:?} -> {:?}, want={}, missing={}",
             bounds.buffered_samples,
-            bounds.target_latency_samples,
+            bounds.configured_latency_samples,
             bounds.target_buffer_samples,
             bounds.drift_guard_samples,
             bounds.soft_cap_samples,
