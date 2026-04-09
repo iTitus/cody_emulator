@@ -188,13 +188,13 @@ impl SidLikeSynth {
                 continue;
             }
 
-            let mut wave = self.waveform_for_voice(i, control, base, noise_clocked[i]);
+            let mut wave_u16 = self.waveform_for_voice(i, control, base, noise_clocked[i]);
 
             if i == 2 {  // readback logic
                 self.osc3_wave_readback = if (control & CTRL_NOISE) != 0 {
                     (self.voices[i].noise_wave >> 8) as u8
                 } else {
-                    waveform_to_readback_u8(wave)
+                    (wave_u16 >> 8) as u8
                 };
             }
 
@@ -205,10 +205,11 @@ impl SidLikeSynth {
                     _ => 1,
                 };
                 if (self.voices[mod_index].phase & 0x8000) != 0 {
-                    wave = -wave;
+                    wave_u16 ^= 0xFFFF;
                 }
             }
 
+            let wave = waveform_u16_to_sample(wave_u16);
             let envelope = self.voices[i].envelope.clamp(0.0, 1.0);
             outputs[i] = wave * envelope;
         }
@@ -278,7 +279,7 @@ impl SidLikeSynth {
         control: u8,
         base: usize,
         noise_clocked: bool,
-    ) -> f32 {
+    ) -> u16 {
         let phase = self.voices[voice_index].phase;
 
         if (control & CTRL_TRIANGLE) != 0 {
@@ -291,18 +292,17 @@ impl SidLikeSynth {
             let pulse =
                 ((self.registers[base + 3] as u16 & 0x0F) << 8) | self.registers[base + 2] as u16;
             let threshold = pulse << 4;
-            return if phase < threshold { 1.0 } else { -1.0 };
+            return if phase < threshold { 0xFFFF } else { 0x0000 };
         }
         if (control & CTRL_NOISE) != 0 {
             let voice = &mut self.voices[voice_index];
             if noise_clocked {
                 voice.noise_wave = self.noise_lfsr;
             }
-            let normalized = voice.noise_wave as f32 / 65535.0;
-            return normalized * 2.0 - 1.0;
+            return voice.noise_wave;
         }
 
-        0.0
+        0
     }
 }
 
@@ -316,21 +316,20 @@ fn envelope_step(seconds: f32, sample_rate_hz: f32) -> f32 {
 }
 
 /// Triangle waveform from 16-bit phase.
-fn triangle(phase: u16) -> f32 {
+fn triangle(phase: u16) -> u16 {
     let p = phase as u32;
     let value = if p < 32768 { p * 2 } else { (65535 - p) * 2 };
-    value as f32 / 32767.5 - 1.0
+    value as u16
 }
 
 /// Sawtooth waveform from 16-bit phase.
-fn saw(phase: u16) -> f32 {
-    phase as f32 / 32767.5 - 1.0
+fn saw(phase: u16) -> u16 {
+    phase
 }
 
-/// Converts a bipolar waveform sample into SID-style osc3 high-byte readback.
-fn waveform_to_readback_u8(sample: f32) -> u8 {
-    let scaled = ((sample.clamp(-1.0, 1.0) * 0.5 + 0.5) * 65535.0) as u16;
-    (scaled >> 8) as u8
+/// Converts unsigned waveform domain into bipolar sample domain.
+fn waveform_u16_to_sample(wave: u16) -> f32 {
+    wave as f32 / 32767.5 - 1.0
 }
 
 /// Converts normalized envelope [0,1] into SPIN-compatible Env3 readback byte.
