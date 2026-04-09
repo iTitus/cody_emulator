@@ -68,6 +68,22 @@ fn configure_voice3_saw_with_test(synth: &mut SidLikeSynth) {
     synth.write_register(AudioRegister::V2Control.as_u8(), 0x20 | 0x08 | 0x01);
 }
 
+fn configure_voice1_sync_chain(synth: &mut SidLikeSynth) {
+    // Voice 1 (index 0): saw + gate + sync (modulated by voice 3).
+    synth.write_register(AudioRegister::V0FreqLo.as_u8(), 0xFF);
+    synth.write_register(AudioRegister::V0FreqHi.as_u8(), 0xFF);
+    synth.write_register(AudioRegister::V0Ad.as_u8(), 0x00);
+    synth.write_register(AudioRegister::V0Sr.as_u8(), 0xF0);
+    synth.write_register(AudioRegister::V0Control.as_u8(), 0x20 | 0x02 | 0x01);
+
+    // Voice 3 (index 2): saw + gate, drives sync-latch events.
+    synth.write_register(AudioRegister::V2FreqLo.as_u8(), 0xFF);
+    synth.write_register(AudioRegister::V2FreqHi.as_u8(), 0xFF);
+    synth.write_register(AudioRegister::V2Ad.as_u8(), 0x00);
+    synth.write_register(AudioRegister::V2Sr.as_u8(), 0xF0);
+    synth.write_register(AudioRegister::V2Control.as_u8(), 0x20 | 0x01);
+}
+
 #[test]
 fn audio_register_roundtrip_and_invalid_decode() {
     let reg = AudioRegister::from_u8(AudioRegister::V1PwHi.as_u8());
@@ -213,6 +229,25 @@ fn synth_test_bit_resets_phase_but_keeps_attack_step_readback() {
     let _ = synth.render_sample(16_000);
     assert_eq!(synth.osc3_readback(), 0x00);
     assert_eq!(synth.env3_readback(), 0x02);
+}
+
+#[test]
+fn synth_sync_latch_delays_voice1_reset_to_following_sample() {
+    let mut synth = SidLikeSynth::new();
+    configure_voice1_sync_chain(&mut synth);
+
+    // Mute voice 3 in final mix so output isolates voice 1 sync behavior.
+    synth.write_register(AudioRegister::FilterModeVolume.as_u8(), 0x8F);
+
+    let mut samples = [0.0_f32; 6];
+    for sample in &mut samples {
+        *sample = synth.render_sample(16_000);
+    }
+
+    // With latch semantics, sample 5 uses phase 0x3FFB (about -0.026).
+    // Immediate same-sample reset would produce about -0.052 instead.
+    assert!(approx_eq(samples[4], -0.0260, 0.0025));
+    assert!(approx_eq(samples[5], -0.03125, 0.0025));
 }
 
 #[test]

@@ -51,6 +51,7 @@ struct VoiceState {
     env_phase: EnvelopePhase,
     last_gate: bool,
     noise_wave: u16,
+    sync_latch: bool,
 }
 
 impl Default for VoiceState {
@@ -61,6 +62,7 @@ impl Default for VoiceState {
             env_phase: EnvelopePhase::Release,
             last_gate: false,
             noise_wave: 0,
+            sync_latch: false,
         }
     }
 }
@@ -134,13 +136,17 @@ impl SidLikeSynth {
         self.noise_lfsr = advance_noise_lfsr(self.noise_lfsr);
 
         let mut controls = [0u8; VOICE_COUNT];
-        let mut wrapped = [false; VOICE_COUNT];
         let mut noise_clocked = [false; VOICE_COUNT];
 
         for i in 0..VOICE_COUNT {
             let base = i * VOICE_STRIDE;
             let control = self.registers[base + 4];
             controls[i] = control;
+
+            let mod_index = modulator_index(i);
+            if (control & CTRL_SYNC) != 0 && self.voices[mod_index].sync_latch {
+                self.voices[i].phase = 0;
+            }
 
             let is_test_mode = (control & CTRL_TEST) != 0;
 
@@ -155,26 +161,11 @@ impl SidLikeSynth {
             let phase_increment = if is_test_mode { 0 } else { freq >> 2 };
             let previous_phase = self.voices[i].phase;
             let new_phase = previous_phase.wrapping_add(phase_increment);
-            wrapped[i] = !is_test_mode && new_phase < previous_phase;
-            noise_clocked[i] = !is_test_mode && ((previous_phase ^ new_phase) & 0x4000) != 0;
+            self.voices[i].sync_latch = new_phase < previous_phase;
+            noise_clocked[i] = ((previous_phase ^ new_phase) & 0x4000) != 0;
             self.voices[i].phase = new_phase;
 
             self.update_envelope(i, control, sample_rate_hz);
-        }
-
-        for i in 0..VOICE_COUNT {
-            if (controls[i] & CTRL_SYNC) == 0 {
-                continue;
-            }
-
-            let mod_index = match i {
-                0 => 2,
-                1 => 0,
-                _ => 1,
-            };
-            if wrapped[mod_index] {
-                self.voices[i].phase = 0;
-            }
         }
 
         let mut outputs = [0.0f32; VOICE_COUNT];
@@ -194,11 +185,7 @@ impl SidLikeSynth {
             }
 
             if (control & CTRL_RING) != 0 {
-                let mod_index = match i {
-                    0 => 2,
-                    1 => 0,
-                    _ => 1,
-                };
+                let mod_index = modulator_index(i);
                 if (self.voices[mod_index].phase & 0x8000) != 0 {
                     wave_u16 ^= 0xFFFF;
                 }
@@ -336,4 +323,12 @@ fn envelope_to_readback_u8(envelope: f32) -> u8 {
 fn advance_noise_lfsr(noise: u16) -> u16 {
     let feedback = if (noise & 1) != 0 { NOISE_TAPS } else { 0 };
     (noise >> 1) ^ feedback
+}
+
+fn modulator_index(voice_index: usize) -> usize {
+    match voice_index {
+        0 => 2,
+        1 => 0,
+        _ => 1,
+    }
 }
