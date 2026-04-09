@@ -31,7 +31,7 @@ crossbeam-queue = "0.3"
 
 # graphics
 bytemuck = { version = "1.25", features = ["derive"] }
-pixels = "0.15"
+pixels = "0.16"
 winit = "0.30"
 winit_input_helper = "0.17"
 

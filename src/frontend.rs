@@ -12,7 +12,7 @@ use crate::memory::Memory;
 use crate::memory::contiguous::Contiguous;
 use crate::memory::mapped::MappedMemory;
 use log::{info, trace};
-use pixels::{Pixels, SurfaceTexture};
+use pixels::{Pixels, ScalingMode, SurfaceTexture};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
@@ -276,13 +276,14 @@ impl<M: Memory> ApplicationHandler for App<M> {
                 )
                 .expect("window created"),
         );
-        let pixels = {
+        let mut pixels = {
             let window_size = window.inner_size();
             let surface_texture =
                 SurfaceTexture::new(window_size.width, window_size.height, Arc::clone(&window));
             Pixels::new(WIDTH, HEIGHT, surface_texture).expect("pixels framebuffer created")
         };
 
+        pixels.set_scaling_mode(ScalingMode::Fill);
         self.state = Some(State { window, pixels });
     }
 
