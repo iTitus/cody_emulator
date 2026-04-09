@@ -23,6 +23,7 @@ const CTRL_TRIANGLE: u8 = 0x10;
 const CTRL_SAW: u8 = 0x20;
 const CTRL_PULSE: u8 = 0x40;
 const CTRL_NOISE: u8 = 0x80;
+const ENVELOPE_MAX_LEVEL_24: u32 = 0xFF_FFFF / 3;
 
 const ATTACK_TIMES_SEC: [f32; 16] = [
     0.002, 0.008, 0.016, 0.024, 0.038, 0.056, 0.068, 0.080, 0.100, 0.250, 0.500, 0.800, 1.000,
@@ -70,6 +71,7 @@ impl Default for VoiceState {
 pub struct SidLikeSynth {
     pub registers: [u8; REGISTER_COUNT],
     voices: [VoiceState; VOICE_COUNT],
+    osc3_wave_readback: u8,
 }
 
 impl Default for SidLikeSynth {
@@ -88,6 +90,7 @@ impl SidLikeSynth {
         Self {
             registers: [0; REGISTER_COUNT],
             voices,
+            osc3_wave_readback: 0,
         }
     }
 
@@ -118,12 +121,12 @@ impl SidLikeSynth {
 
     /// Returns current voice 3 oscillator readback value.
     pub fn osc3_readback(&self) -> u8 {
-        (self.voices[2].phase >> 8) as u8
+        self.osc3_wave_readback
     }
 
     /// Returns current voice 3 envelope readback value.
     pub fn env3_readback(&self) -> u8 {
-        (self.voices[2].envelope.clamp(0.0, 1.0) * 255.0) as u8
+        envelope_to_readback_u8(self.voices[2].envelope)
     }
 
     /// Renders a single mono sample at `sample_rate_hz`.
@@ -144,6 +147,9 @@ impl SidLikeSynth {
                 self.voices[i].env_phase = EnvelopePhase::Release;
                 self.voices[i].last_gate = false;
                 self.voices[i].noise_phase_bit = 0;
+                if i == 2 {
+                    self.osc3_wave_readback = 0;
+                }
                 continue;
             }
 
@@ -182,6 +188,9 @@ impl SidLikeSynth {
             }
 
             let mut wave = self.waveform_for_voice(i, control, base);
+            if i == 2 {
+                self.osc3_wave_readback = waveform_to_readback_u8(wave);
+            }
             if (control & CTRL_RING) != 0 {
                 let mod_index = match i {
                     0 => 2,
@@ -310,4 +319,16 @@ fn triangle(phase: u16) -> f32 {
 /// Sawtooth waveform from 16-bit phase.
 fn saw(phase: u16) -> f32 {
     phase as f32 / 32767.5 - 1.0
+}
+
+/// Converts a bipolar waveform sample into SID-style osc3 high-byte readback.
+fn waveform_to_readback_u8(sample: f32) -> u8 {
+    let scaled = ((sample.clamp(-1.0, 1.0) * 0.5 + 0.5) * 65535.0) as u16;
+    (scaled >> 8) as u8
+}
+
+/// Converts normalized envelope [0,1] into SPIN-compatible Env3 readback byte.
+fn envelope_to_readback_u8(envelope: f32) -> u8 {
+    let amplitude_24 = (envelope.clamp(0.0, 1.0) * ENVELOPE_MAX_LEVEL_24 as f32) as u32;
+    (amplitude_24 >> 16) as u8
 }

@@ -44,6 +44,14 @@ fn configure_voice3_saw(synth: &mut SidLikeSynth) {
     synth.write_register(AudioRegister::V2Control.as_u8(), 0x20 | 0x01);
 }
 
+fn configure_voice3_triangle(synth: &mut SidLikeSynth) {
+    synth.write_register(AudioRegister::V2FreqLo.as_u8(), 0xFF);
+    synth.write_register(AudioRegister::V2FreqHi.as_u8(), 0xFF);
+    synth.write_register(AudioRegister::V2Ad.as_u8(), 0x00);
+    synth.write_register(AudioRegister::V2Sr.as_u8(), 0xF0);
+    synth.write_register(AudioRegister::V2Control.as_u8(), 0x10 | 0x01);
+}
+
 #[test]
 fn audio_register_roundtrip_and_invalid_decode() {
     let reg = AudioRegister::from_u8(AudioRegister::V1PwHi.as_u8());
@@ -136,6 +144,34 @@ fn synth_rejects_readonly_writes_and_generates_readback() {
 }
 
 #[test]
+fn synth_triangle_readback_values_are_exact() {
+    let mut synth = SidLikeSynth::new();
+    configure_voice3_triangle(&mut synth);
+    synth.write_register(AudioRegister::FilterModeVolume.as_u8(), 0x0F);
+
+    let _ = synth.render_sample(16_000);
+
+    // For freq=0xFFFF, phase increment is 0x3FFF and first-sample triangle readback is 0x7F.
+    assert_eq!(synth.osc3_readback(), 0x7F);
+    // SPIN writes the high byte of a 24-bit envelope amplitude with MAXLEVEL=0xFFFFFF/3.
+    assert_eq!(synth.env3_readback(), 0x02);
+}
+
+#[test]
+fn synth_env3_readback_caps_at_spin_maxlevel() {
+    let mut synth = SidLikeSynth::new();
+    configure_voice3_triangle(&mut synth);
+    synth.write_register(AudioRegister::FilterModeVolume.as_u8(), 0x0F);
+    synth.write_register(AudioRegister::V2Sr.as_u8(), 0xF0);
+
+    for _ in 0..64 {
+        let _ = synth.render_sample(16_000);
+    }
+
+    assert_eq!(synth.env3_readback(), 0x55);
+}
+
+#[test]
 fn synth_volume_zero_silences_output() {
     let mut synth = SidLikeSynth::new();
     configure_voice3_saw(&mut synth);
@@ -214,6 +250,51 @@ fn engine_resolves_readback_requests_after_forced_catchup() {
         100,
     );
     assert_ne!(value, 0);
+}
+
+#[test]
+fn engine_triangle_readback_values_are_exact() {
+    let runtime = Arc::new(AudioDataPlane::new(512));
+    let control = Arc::new(AudioControlPlane::new(512));
+    let config = AudioConfig::new(1_000_000.0, 16_000, 256.0);
+    let mut engine = AudioEngine::new(Arc::clone(&runtime), Arc::clone(&control), config);
+
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2FreqLo.as_u8(),
+        value: 0xFF,
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2FreqHi.as_u8(),
+        value: 0xFF,
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2Ad.as_u8(),
+        value: 0x00,
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2Sr.as_u8(),
+        value: 0xF0,
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::V2Control.as_u8(),
+        value: 0x10 | 0x01, // triangle + gate
+    });
+    control.write_events.push_drop_oldest(AudioEvent {
+        cycle: 0,
+        register: AudioRegister::FilterModeVolume.as_u8(),
+        value: 0x0F,
+    });
+
+    let osc3 = engine.resolve_readback_value(100, AudioRegister::Osc3Read.as_u8(), 100);
+    let env3 = engine.resolve_readback_value(100, AudioRegister::Env3Read.as_u8(), 100);
+
+    assert_eq!(osc3, 0x7F);
+    assert_eq!(env3, 0x02);
 }
 
 #[test]
@@ -676,6 +757,28 @@ fn mmio_readback_read_forces_current_cycle_resolution() {
 
     assert_ne!(osc3, 0);
     assert_ne!(env3, 0);
+}
+
+#[test]
+fn mmio_triangle_readback_values_are_exact() {
+    let config = AudioConfig::new(1_000_000.0, 16_000, 256.0);
+    let mut dev = AudioMmioDevice::with_timing(config);
+
+    dev.write_u8(AudioRegister::V2FreqLo.as_u8() as u16, 0xFF);
+    dev.write_u8(AudioRegister::V2FreqHi.as_u8() as u16, 0xFF);
+    dev.write_u8(AudioRegister::V2Ad.as_u8() as u16, 0x00);
+    dev.write_u8(AudioRegister::V2Sr.as_u8() as u16, 0xF0);
+    dev.write_u8(AudioRegister::V2Control.as_u8() as u16, 0x10 | 0x01);
+    dev.write_u8(AudioRegister::FilterModeVolume.as_u8() as u16, 0x0F);
+
+    // Keep last_cycle current for synchronous readback catch-up.
+    let _ = dev.update(100);
+
+    let osc3 = dev.read_u8(AudioRegister::Osc3Read.as_u8() as u16);
+    let env3 = dev.read_u8(AudioRegister::Env3Read.as_u8() as u16);
+
+    assert_eq!(osc3, 0x7F);
+    assert_eq!(env3, 0x02);
 }
 
 #[test]
