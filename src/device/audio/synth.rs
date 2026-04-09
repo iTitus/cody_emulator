@@ -99,7 +99,8 @@ impl SidLikeSynth {
         }
 
         // Reject writes to read-only registers
-        if address == AudioRegister::Osc3Read.as_u8() || address == AudioRegister::Env3Read.as_u8() {
+        if address == AudioRegister::Osc3Read.as_u8() || address == AudioRegister::Env3Read.as_u8()
+        {
             return;
         }
 
@@ -127,7 +128,7 @@ impl SidLikeSynth {
 
     /// Renders a single mono sample at `sample_rate_hz`.
     pub fn render_sample(&mut self, sample_rate_hz: u32) -> f32 {
-        let sample_rate_hz = sample_rate_hz.max(1) as f32;  // TODO: handle limit somewhere else
+        let sample_rate_hz = sample_rate_hz.max(1) as f32; // TODO: handle limit somewhere else
 
         let mut controls = [0u8; VOICE_COUNT];
         let mut wrapped = [false; VOICE_COUNT];
@@ -196,8 +197,10 @@ impl SidLikeSynth {
             outputs[i] = wave * envelope;
         }
 
-        let volume = (self.registers[AudioRegister::FilterModeVolume.as_u8() as usize] & 0x0F) as f32 / 15.0;
-        let mute_voice3 = (self.registers[AudioRegister::FilterModeVolume.as_u8() as usize] & 0x80) != 0;
+        let volume =
+            (self.registers[AudioRegister::FilterModeVolume.as_u8() as usize] & 0x0F) as f32 / 15.0;
+        let mute_voice3 =
+            (self.registers[AudioRegister::FilterModeVolume.as_u8() as usize] & 0x80) != 0;
 
         let mut mix = outputs[0] + outputs[1];
         if !mute_voice3 {
@@ -263,7 +266,8 @@ impl SidLikeSynth {
             return saw(phase);
         }
         if (control & CTRL_PULSE) != 0 {
-            let pulse = ((self.registers[base + 3] as u16 & 0x0F) << 8) | self.registers[base + 2] as u16;
+            let pulse =
+                ((self.registers[base + 3] as u16 & 0x0F) << 8) | self.registers[base + 2] as u16;
             let threshold = pulse << 4;
             return if phase < threshold { 1.0 } else { -1.0 };
         }
@@ -299,11 +303,7 @@ fn envelope_step(seconds: f32, sample_rate_hz: f32) -> f32 {
 /// Triangle waveform from 16-bit phase.
 fn triangle(phase: u16) -> f32 {
     let p = phase as u32;
-    let value = if p < 32768 {
-        p * 2
-    } else {
-        (65535 - p) * 2
-    };
+    let value = if p < 32768 { p * 2 } else { (65535 - p) * 2 };
     value as f32 / 32767.5 - 1.0
 }
 

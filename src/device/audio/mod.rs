@@ -5,17 +5,17 @@
 //! - Base address: `$D400`
 //! - Readback registers: `$D41B` (OSC3), `$D41C` (ENV3)
 
+pub mod core;
 pub mod engine;
-pub mod fx;
 pub mod factory;
+pub mod fx;
 pub mod host;
 pub mod mmiodev;
-pub mod core;
 pub mod post_buffer_policy;
+pub mod post_resampler;
 pub mod postprocess;
 pub mod queue;
 pub mod registers;
-pub mod post_resampler;
 pub mod source;
 pub mod synth;
 
@@ -50,9 +50,11 @@ pub(crate) fn compute_soft_cap_samples(
     desired_cap.clamp(min_cap, max_cap)
 }
 
-pub use host::CpalHost;
 pub use core::AudioCore;
-pub use factory::{AudioPipeline, create_audio_core, create_audio_pipeline, create_audio_pipeline_with_timing};
+pub use factory::{
+    AudioPipeline, create_audio_core, create_audio_pipeline, create_audio_pipeline_with_timing,
+};
+pub use host::CpalHost;
 pub use mmiodev::{AUDIO_BASE, AUDIO_REGISTER_COUNT, AudioMmioDevice};
 pub use postprocess::{AudioPostProcessConfig, AudioPostProcessor};
 pub use registers::AudioRegister;

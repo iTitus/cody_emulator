@@ -1,14 +1,10 @@
 //! Construction helpers for the audio subsystem graph.
 
-use crate::device::audio::engine::{
-    AudioControlPlane,
-    AudioEngine,
-    AudioDataPlane,
-    SharedAudioControlPlane,
-    SharedAudioDataPlane,
-};
-use crate::device::audio::core::AudioCore;
 use crate::device::audio::AudioConfig;
+use crate::device::audio::core::AudioCore;
+use crate::device::audio::engine::{
+    AudioControlPlane, AudioDataPlane, AudioEngine, SharedAudioControlPlane, SharedAudioDataPlane,
+};
 use crate::device::audio::fx::{GainEffect, OnePoleHighPassEffect, SoftClipEffect};
 use crate::device::audio::mmiodev::AudioMmioDevice;
 use crate::device::audio::postprocess::AudioPostProcessor;
@@ -21,16 +17,12 @@ pub struct AudioPipeline {
 }
 
 /// Creates the shared data plane used by the engine and postprocessor.
-pub fn create_audio_data_plane(
-    pcm_capacity: usize,
-) -> SharedAudioDataPlane {
+pub fn create_audio_data_plane(pcm_capacity: usize) -> SharedAudioDataPlane {
     Arc::new(AudioDataPlane::new(pcm_capacity))
 }
 
 /// Creates lock-free control queues shared between MMIO and engine.
-pub fn create_audio_control_plane(
-    write_queue_capacity: usize,
-) -> SharedAudioControlPlane {
+pub fn create_audio_control_plane(write_queue_capacity: usize) -> SharedAudioControlPlane {
     Arc::new(AudioControlPlane::new(write_queue_capacity))
 }
 
@@ -40,11 +32,7 @@ pub fn create_audio_engine(
     control_queues: SharedAudioControlPlane,
     config: AudioConfig,
 ) -> AudioEngine {
-    AudioEngine::new(
-        runtime,
-        control_queues,
-        config,
-    )
+    AudioEngine::new(runtime, control_queues, config)
 }
 
 /// Creates a bundled audio core with shared runtime, control plane, and engine.

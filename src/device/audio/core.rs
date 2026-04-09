@@ -1,14 +1,10 @@
 //! Core audio runtime components shared across frontends.
 
+use crate::device::audio::AudioConfig;
 use crate::device::audio::engine::{
-    AudioControlPlane,
-    AudioDataPlane,
-    AudioEngine,
-    AudioTiming,
-    SharedAudioControlPlane,
+    AudioControlPlane, AudioDataPlane, AudioEngine, AudioTiming, SharedAudioControlPlane,
     SharedAudioDataPlane,
 };
-use crate::device::audio::AudioConfig;
 use std::sync::Arc;
 
 /// Bundles the audio engine with its shared runtime and control plane.

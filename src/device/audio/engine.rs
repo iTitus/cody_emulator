@@ -4,9 +4,11 @@
 //! PCM in sample steps, and resolves MMIO readback requests against historical
 //! snapshots.
 
-use crate::device::audio::queue::{EventQueueHandle, PcmBufferHandle, new_event_queue, new_pcm_buffer};
 use crate::device::audio::AudioConfig;
 use crate::device::audio::compute_soft_cap_samples;
+use crate::device::audio::queue::{
+    EventQueueHandle, PcmBufferHandle, new_event_queue, new_pcm_buffer,
+};
 use crate::device::audio::registers::AudioRegister;
 use crate::device::audio::synth::SidLikeSynth;
 use std::collections::VecDeque;
@@ -14,7 +16,6 @@ use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
-
 
 #[derive(Debug, Clone, Copy)]
 pub struct AudioTiming {
@@ -304,7 +305,7 @@ impl AudioDataPlane {
             snapshot_update_count: AtomicU64::new(0),
             dropped_stale_events: AtomicU64::new(0),
             total_samples_produced: AtomicU64::new(0),
-            audio_output_enabled: AtomicBool::new(false),
+            audio_output_enabled: AtomicBool::new(true),
             callback_heartbeat_epoch: AtomicU64::new(0),
             pcm_soft_cap_samples: AtomicU64::new(0),
             target_latency_samples: AtomicU64::new(0),
@@ -344,7 +345,9 @@ impl AudioDataPlane {
 
     /// Records that the host output callback ran.
     pub fn note_callback_activity(&self) {
-        let _ = self.callback_heartbeat_epoch.fetch_add(1, Ordering::Relaxed);
+        let _ = self
+            .callback_heartbeat_epoch
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Returns the last observed callback heartbeat epoch.
@@ -487,7 +490,8 @@ impl AudioDataPlane {
 
     /// Adds dropped stale event count.
     pub fn add_dropped_stale_events(&self, count: u64) {
-        self.dropped_stale_events.fetch_add(count, Ordering::Relaxed);
+        self.dropped_stale_events
+            .fetch_add(count, Ordering::Relaxed);
     }
 
     /// Returns elapsed time since last engine stats log if the interval passed.
@@ -591,9 +595,7 @@ impl AudioEngine {
             history_horizon_cycles,
             max_pending_writes: 8192,
             snapshot_dirty_since_capture: false,
-            stats: PcmStats {
-                stats_samples: 0,
-            },
+            stats: PcmStats { stats_samples: 0 },
             last_cpu_cycle: 0,
             seen_audio_output_enabled: runtime.audio_output_enabled(),
         };
@@ -621,7 +623,8 @@ impl AudioEngine {
         let target_latency_samples = self.runtime.target_latency_samples().max(1);
         self.target_latency_cycles = target_latency_samples as f64 * self.cpu_cycles_per_sample;
         self.history_horizon_cycles = (new_cpu_hz as usize).max(8192);
-        self.readbacks.set_history_horizon(self.history_horizon_cycles);
+        self.readbacks
+            .set_history_horizon(self.history_horizon_cycles);
 
         log::trace!(
             "Audio engine retuned: cpu_hz={:.2}, cycles_per_sample={:.3}, target_latency_cycles={:.1} (~{} samples)",
@@ -672,15 +675,14 @@ impl AudioEngine {
     /// Returns true if a debug log should be emitted this tick.
     fn should_log_debug(&mut self, now: Instant) -> bool {
         let _ = now;
-        self.runtime
-            .should_log_engine_debug(Duration::from_secs(1))
+        self.runtime.should_log_engine_debug(Duration::from_secs(1))
     }
 
     /// Clamps the target cycle based on PCM buffering headroom.
     fn compute_target_cycle(&mut self, desired_target_cycle: f64) -> (f64, bool) {
         // Apply backpressure based on the soft cap so we don't overfill the shared PCM ring.
-        let target_latency_samples = (self.target_latency_cycles / self.cpu_cycles_per_sample)
-            .ceil() as usize;
+        let target_latency_samples =
+            (self.target_latency_cycles / self.cpu_cycles_per_sample).ceil() as usize;
         let mut max_buffered = self.runtime.pcm_soft_cap_samples();
         if max_buffered == 0 {
             max_buffered = target_latency_samples.max(1).saturating_mul(2);
@@ -702,8 +704,8 @@ impl AudioEngine {
             return (self.rendered_cpu_cycle, log_ready);
         }
 
-        let max_target_cycle = self.rendered_cpu_cycle
-            + allowed_samples as f64 * self.cpu_cycles_per_sample;
+        let max_target_cycle =
+            self.rendered_cpu_cycle + allowed_samples as f64 * self.cpu_cycles_per_sample;
         let clamped = desired_target_cycle.min(max_target_cycle);
         if clamped < desired_target_cycle && log_ready {
             log::debug!(
@@ -794,7 +796,10 @@ impl AudioEngine {
                 self.readbacks.clear_batch();
                 self.runtime.store_snapshot(self.synth.clone());
                 self.snapshot_dirty_since_capture = false;
-                log::info!("Audio engine session resumed at cycle {:.1}", self.rendered_cpu_cycle);
+                log::info!(
+                    "Audio engine session resumed at cycle {:.1}",
+                    self.rendered_cpu_cycle
+                );
             }
         }
 
@@ -836,7 +841,8 @@ impl AudioEngine {
 
         if !self.produced_samples.is_empty() {
             self.stats.stats_samples = self
-                .stats.stats_samples
+                .stats
+                .stats_samples
                 .saturating_add(self.produced_samples.len() as u64);
         }
         self.readbacks.flush(self.rendered_cpu_cycle);

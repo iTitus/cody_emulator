@@ -5,16 +5,12 @@
 //! the configured channel count.
 
 use crate::device::audio::engine::SharedAudioDataPlane;
-use crate::device::audio::post_buffer_policy::{BufferPolicyManager, BufferState};
-use crate::device::audio::post_resampler::LinearResampler;
 pub use crate::device::audio::fx::{
-    AudioEffect,
-    DcBlockEffect,
-    GainEffect,
-    OnePoleHighPassEffect,
-    OnePoleLowPassEffect,
+    AudioEffect, DcBlockEffect, GainEffect, OnePoleHighPassEffect, OnePoleLowPassEffect,
     SoftClipEffect,
 };
+use crate::device::audio::post_buffer_policy::{BufferPolicyManager, BufferState};
+use crate::device::audio::post_resampler::LinearResampler;
 use crate::device::audio::synth::SidLikeSynth;
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -120,7 +116,13 @@ impl PostPipeline {
     }
 
     /// Applies post-resample effects to the filled output range.
-    fn apply_post_fx_chain(&mut self, out: &mut [f32], filled: usize, channels: usize, output_rate: u32) {
+    fn apply_post_fx_chain(
+        &mut self,
+        out: &mut [f32],
+        filled: usize,
+        channels: usize,
+        output_rate: u32,
+    ) {
         if self.effects.post.is_empty() {
             return;
         }
@@ -150,6 +152,16 @@ impl SourceBuffer {
             fallback_snapshot_updates: 0,
             buffer_policy: BufferPolicyManager::new(),
         }
+    }
+
+    /// Enables or disables the initial catch-up sensitivity heuristic.
+    fn set_initial_catchup_enabled(&mut self, enabled: bool) {
+        self.buffer_policy.set_initial_catchup_enabled(enabled);
+    }
+
+    /// Returns whether initial catch-up sensitivity is enabled.
+    fn initial_catchup_enabled(&self) -> bool {
+        self.buffer_policy.initial_catchup_enabled()
     }
 
     /// Returns the current buffer management state.
@@ -190,12 +202,9 @@ impl SourceBuffer {
         );
         let mut chunk = std::mem::take(&mut self.refill_chunk);
         chunk.clear();
-        let crossfade_len = self.buffer_policy.update_buffer_state(
-            runtime,
-            synth_sample_rate,
-            wanted_len,
-            missing,
-        );
+        let crossfade_len =
+            self.buffer_policy
+                .update_buffer_state(runtime, synth_sample_rate, wanted_len, missing);
 
         // Pull PCM from the runtime. If there is not enough, fall back to a snapshot.
         runtime.pop_pcm_samples(missing, &mut chunk);
@@ -204,7 +213,14 @@ impl SourceBuffer {
         } else {
             None
         };
-        self.handle_underrun_fallback(runtime, synth_sample_rate, missing, &mut chunk, snapshot, pipeline.last_sample());
+        self.handle_underrun_fallback(
+            runtime,
+            synth_sample_rate,
+            missing,
+            &mut chunk,
+            snapshot,
+            pipeline.last_sample(),
+        );
         self.apply_crossfade_skip(runtime, crossfade_len, &mut chunk, pipeline.last_sample());
         pipeline.apply_pre_fx_chain(&mut chunk, synth_sample_rate);
 
@@ -267,7 +283,10 @@ impl SourceBuffer {
                     chunk.push(shadow.render_sample(synth_sample_rate));
                 }
             } else {
-                log::trace!("Audio postprocess: padding {} samples with last-sample hold", needed);
+                log::trace!(
+                    "Audio postprocess: padding {} samples with last-sample hold",
+                    needed
+                );
                 let hold = chunk.last().copied().unwrap_or(last_sample);
                 chunk.resize(missing, hold);
             }
@@ -364,6 +383,16 @@ impl AudioPostProcessor {
         self.buffer.buffer_state()
     }
 
+    /// Enables or disables the initial catch-up sensitivity heuristic.
+    pub fn set_initial_catchup_enabled(&mut self, enabled: bool) {
+        self.buffer.set_initial_catchup_enabled(enabled);
+    }
+
+    /// Returns whether initial catch-up sensitivity is enabled.
+    pub fn initial_catchup_enabled(&self) -> bool {
+        self.buffer.initial_catchup_enabled()
+    }
+
     /// Returns the next buffer state for diagnostics/tests without consuming samples.
     pub fn preview_buffer_state(&mut self, wanted_len: usize) -> BufferState {
         self.buffer
@@ -421,13 +450,15 @@ impl AudioPostProcessor {
             return;
         }
 
-        let needed = self.pipeline.required_source_len(
-            frames,
+        let needed =
+            self.pipeline
+                .required_source_len(frames, self.synth_sample_rate, sample_rate_hz);
+        self.buffer.refill_source_fifo(
+            &self.runtime,
             self.synth_sample_rate,
-            sample_rate_hz,
+            needed,
+            &mut self.pipeline,
         );
-        self.buffer
-            .refill_source_fifo(&self.runtime, self.synth_sample_rate, needed, &mut self.pipeline);
 
         let filled = self.pipeline.render_interleaved(
             &mut self.buffer.source_fifo,

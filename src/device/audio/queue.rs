@@ -247,5 +247,3 @@ impl PcmBuffer for LockFreePcmRingBuffer {
         LockFreePcmRingBuffer::underrun_samples(self)
     }
 }
-
-
