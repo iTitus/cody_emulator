@@ -33,7 +33,8 @@ pub struct FrontendAudioOptions {
     pub audio_off: bool,
     pub audio_no_initial_catchup: bool,
     pub audio_resampler_fast: bool,
-    pub audio_buffer_frames: u32,
+    pub audio_latency_bias_q10: u16,
+    pub audio_catchup_strictness_q10: u16,
 }
 
 /// Frontend-facing audio host wrapper.
@@ -196,6 +197,11 @@ pub fn create_frontend_audio(options: FrontendAudioOptions) -> FrontendAudio {
         .post
         .set_initial_catchup_enabled(!options.audio_no_initial_catchup);
 
+    // Apply user-selected buffering preferences within safe bounds.
+    let runtime = pipeline.post.shared_data_plane();
+    runtime.set_latency_bias_q10(options.audio_latency_bias_q10 as u32);
+    runtime.set_catchup_trigger_strictness_q10(options.audio_catchup_strictness_q10 as u32);
+
     let host = if options.audio_off {
         log::info!(
             "Audio backend disabled (--audio-off): using stub host and bypassing postprocess/resampling"
@@ -204,10 +210,7 @@ pub fn create_frontend_audio(options: FrontendAudioOptions) -> FrontendAudio {
     } else {
         FrontendAudioHost::Backend(CpalHost::new(
             pipeline.post,
-            AudioPostProcessConfig {
-                preferred_output_buffer_frames: options.audio_buffer_frames,
-                ..AudioPostProcessConfig::default()
-            },
+            AudioPostProcessConfig::default(),
         ))
     };
 

@@ -50,24 +50,46 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     fast: bool,
 
-    /// Audio output latency preset (requested CPAL output buffer size in frames).
-    #[arg(long, value_enum, default_value_t = AudioLatencyPreset::Default)]
-    audio_latency: AudioLatencyPreset,
+    /// Latency bias preset for the target buffer length.
+    ///
+    /// Lower values bias toward lower latency (more aggressive), while higher values bias toward smoother playback.
+    #[arg(long, value_enum, conflicts_with_all = ["audio_disable", "audio_silent"])]
+    audio_latency: Option<AudioLatencyPreset>,
+
+    /// Catch-up trigger strictness preset.
+    ///
+    /// Lower values trigger catch-up earlier (more aggressive), while higher values trigger later (more relaxed).
+    /// If you're annoyed by some weird audio artifacts, try relaxing this value.
+    #[arg(long, value_enum, conflicts_with_all = ["audio_disable", "audio_silent"])]
+    audio_catchup: Option<AudioCatchupStrictnessPreset>,
 
     /// Disable initial catch-up sensitivity heuristic for audio buffering.
-    #[arg(long, default_value_t = false)]
+    ///
+    /// By default, the emulator will be more aggressive about triggering catch-up when the audio buffer is initially filling up, to reduce latency early.
+    /// Only affects first catch-up.
+    #[arg(long, default_value_t = false, conflicts_with_all = ["audio_disable", "audio_silent"])]
     audio_no_initial_catchup: bool,
 
     /// Use the lightweight linear output resampler instead of the default cubic resampler.
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, conflicts_with_all = ["audio_disable", "audio_silent"])]
     audio_resampler_fast: bool,
 
     /// Disable audio output (keeps the audio engine running for authentic emulation of audio register behavior).
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, conflicts_with = "audio_disable", short = 's')]
     audio_silent: bool,
 
     /// Disable audio entirely (disables everything related to audio, including the MMIO device and engine).
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        conflicts_with_all = [
+            "audio_silent",
+            "audio_no_initial_catchup",
+            "audio_resampler_fast",
+            "audio_latency",
+            "audio_catchup"
+        ]
+    )]
     audio_disable: bool,
 
     /// Each time this option is added increases the default logging level
@@ -85,13 +107,32 @@ enum AudioLatencyPreset {
 }
 
 impl AudioLatencyPreset {
-    const fn buffer_frames(self) -> u32 {
+    const fn latency_bias_q10(self) -> u16 {
         match self {
-            Self::Low => 128,
-            Self::Default => 256,
-            Self::Medium => 512,
-            Self::High => 1024,
-            Self::Generous => 2048,
+            Self::Low => 896,
+            Self::Default => 1024,
+            Self::Medium => 1152,
+            Self::High => 1280,
+            Self::Generous => 1408,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum AudioCatchupStrictnessPreset {
+    Relaxed,
+    Default,
+    Strict,
+    VeryStrict,
+}
+
+impl AudioCatchupStrictnessPreset {
+    const fn strictness_q10(self) -> u16 {
+        match self {
+            Self::Relaxed => 1280,
+            Self::Default => 1024,
+            Self::Strict => 896,
+            Self::VeryStrict => 800,
         }
     }
 }
@@ -124,7 +165,12 @@ pub fn main() {
         cli.fix_newlines,
         cli.physical_keyboard,
         cli.fast,
-        cli.audio_latency.buffer_frames(),
+        cli.audio_latency
+            .unwrap_or(AudioLatencyPreset::Default)
+            .latency_bias_q10(),
+        cli.audio_catchup
+            .unwrap_or(AudioCatchupStrictnessPreset::Default)
+            .strictness_q10(),
         cli.audio_no_initial_catchup,
         cli.audio_resampler_fast,
         cli.audio_silent,

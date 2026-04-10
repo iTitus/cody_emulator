@@ -288,6 +288,11 @@ pub struct AudioDataPlane {
     total_samples_produced: AtomicU64,
     audio_output_enabled: AtomicBool,
     callback_heartbeat_epoch: AtomicU64,
+    callback_last_buffer_synth_samples: AtomicU64,
+    callback_peak_buffer_synth_samples: AtomicU64,
+    callback_effective_synth_samples: AtomicU64,
+    latency_bias_q10: AtomicU64,
+    catchup_trigger_strictness_q10: AtomicU64,
     pcm_soft_cap_samples: AtomicU64,
     target_latency_samples: AtomicU64,
     stats: Mutex<AudioStats>,
@@ -331,6 +336,11 @@ impl AudioDataPlane {
             total_samples_produced: AtomicU64::new(0),
             audio_output_enabled: AtomicBool::new(true),
             callback_heartbeat_epoch: AtomicU64::new(0),
+            callback_last_buffer_synth_samples: AtomicU64::new(0),
+            callback_peak_buffer_synth_samples: AtomicU64::new(0),
+            callback_effective_synth_samples: AtomicU64::new(0),
+            latency_bias_q10: AtomicU64::new(1024),
+            catchup_trigger_strictness_q10: AtomicU64::new(1024),
             pcm_soft_cap_samples: AtomicU64::new(0),
             target_latency_samples: AtomicU64::new(0),
             stats: Mutex::new(AudioStats {
@@ -375,9 +385,82 @@ impl AudioDataPlane {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Records callback activity and callback buffer size in synth PCM samples.
+    pub fn note_callback_activity_with_synth_samples(&self, synth_samples: usize) {
+        self.note_callback_activity();
+        let synth_samples = synth_samples as u64;
+        self.callback_last_buffer_synth_samples
+            .store(synth_samples, Ordering::Relaxed);
+
+        let mut peak = self.callback_peak_buffer_synth_samples.load(Ordering::Relaxed);
+        while synth_samples > peak {
+            match self.callback_peak_buffer_synth_samples.compare_exchange_weak(
+                peak,
+                synth_samples,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => peak = observed,
+            }
+        }
+    }
+
     /// Returns the last observed callback heartbeat epoch.
     pub fn callback_heartbeat_epoch(&self) -> u64 {
         self.callback_heartbeat_epoch.load(Ordering::Relaxed)
+    }
+
+    /// Returns the most recently observed callback buffer size in synth PCM samples.
+    pub fn callback_last_buffer_synth_samples(&self) -> usize {
+        self.callback_last_buffer_synth_samples.load(Ordering::Relaxed) as usize
+    }
+
+    /// Returns and resets the max callback buffer size seen since last query,
+    /// measured in synth PCM samples.
+    pub fn take_callback_peak_buffer_synth_samples(&self) -> usize {
+        self.callback_peak_buffer_synth_samples
+            .swap(0, Ordering::Relaxed) as usize
+    }
+
+    /// Returns callback headroom estimate in synth samples used by post-buffer policy.
+    pub fn callback_effective_synth_samples(&self) -> usize {
+        self.callback_effective_synth_samples.load(Ordering::Relaxed) as usize
+    }
+
+    /// Stores callback headroom estimate in synth samples used by post-buffer policy.
+    pub fn set_callback_effective_synth_samples(&self, samples: usize) {
+        self.callback_effective_synth_samples
+            .store(samples as u64, Ordering::Relaxed);
+    }
+
+    /// Sets latency bias in Q10 for callback-adaptive buffering.
+    ///
+    /// 1024 is neutral. Lower values bias lower latency; higher values bias
+    /// smoother playback.
+    pub fn set_latency_bias_q10(&self, bias_q10: u32) {
+        let bias_q10 = bias_q10.clamp(768, 1536);
+        self.latency_bias_q10
+            .store(bias_q10 as u64, Ordering::Relaxed);
+    }
+
+    /// Returns latency bias in Q10 for callback-adaptive buffering.
+    pub fn latency_bias_q10(&self) -> u32 {
+        self.latency_bias_q10.load(Ordering::Relaxed) as u32
+    }
+
+    /// Sets the catchup trigger strictness in Q10.
+    ///
+    /// 1024 is neutral. Lower values trigger catchup earlier; higher values later.
+    pub fn set_catchup_trigger_strictness_q10(&self, strictness_q10: u32) {
+        let strictness_q10 = strictness_q10.clamp(768, 1536);
+        self.catchup_trigger_strictness_q10
+            .store(strictness_q10 as u64, Ordering::Relaxed);
+    }
+
+    /// Returns catchup trigger strictness in Q10.
+    pub fn catchup_trigger_strictness_q10(&self) -> u32 {
+        self.catchup_trigger_strictness_q10.load(Ordering::Relaxed) as u32
     }
 
     /// Returns buffered PCM sample count.
@@ -663,6 +746,8 @@ impl AudioEngine {
     /// Advances synthesis toward `cpu_cycle` while maintaining target latency.
     pub fn advance_to_cpu_cycle(&mut self, cpu_cycle: usize) {
         self.last_cpu_cycle = cpu_cycle;
+        let target_latency_samples = self.runtime.target_latency_samples().max(1);
+        self.target_latency_cycles = target_latency_samples as f64 * self.cpu_cycles_per_sample;
         let target_cycle = (cpu_cycle as f64 - self.target_latency_cycles).max(0.0);
         self.advance_to_target_cycle(target_cycle);
     }
@@ -879,7 +964,7 @@ impl AudioEngine {
 
         let sample_count = self.flush_produced_samples();
         if sample_count > 0 {
-            log::debug!(
+            log::trace!(
                 "Audio engine step: {} samples produced, total queued PCM: {}",
                 sample_count,
                 self.runtime.pcm_len()

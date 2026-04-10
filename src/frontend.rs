@@ -40,7 +40,8 @@ pub fn start(
     fix_newlines: bool,
     physical_keyboard: bool,
     fast: bool,
-    audio_buffer_frames: u32,
+    audio_latency_bias_q10: u16,
+    audio_catchup_strictness_q10: u16,
     audio_no_initial_catchup: bool,
     audio_resampler_fast: bool,
     audio_off: bool,
@@ -197,7 +198,8 @@ pub fn start(
             audio_off,
             audio_no_initial_catchup,
             audio_resampler_fast,
-            audio_buffer_frames,
+            audio_latency_bias_q10,
+            audio_catchup_strictness_q10,
         });
         let audio_dev = Rc::new(RefCell::new(frontend_audio.mmio));
         let mut host = frontend_audio.host;

@@ -805,6 +805,21 @@ fn build_policy_host(
     AudioPostProcessor::new(runtime, synth_sample_rate)
 }
 
+fn run_one_refill(runtime: Arc<AudioDataPlane>, synth_sample_rate: u32) {
+    let mut host = AudioPostProcessor::new(runtime, synth_sample_rate);
+    let cfg = AudioPostProcessConfig {
+        sample_rate_hz: synth_sample_rate,
+        channels: 1,
+        preferred_output_buffer_frames: 256,
+    };
+
+    // Catchup decisions are gated for ~1s after startup.
+    std::thread::sleep(Duration::from_millis(1100));
+
+    let mut out = vec![0.0; 1];
+    host.render_interleaved(&mut out, &cfg);
+}
+
 #[test]
 fn policy_overrun_when_buffered_exceeds_soft_cap() {
     let mut host = build_policy_host(128, 200, 201, 60);
@@ -822,6 +837,54 @@ fn policy_catchup_when_buffered_over_drift_guard() {
 }
 
 #[test]
+fn catchup_strictness_changes_resulting_buffer_depth() {
+    let runtime_low_strictness = Arc::new(AudioDataPlane::new(4096));
+    runtime_low_strictness.set_target_latency_samples(128);
+    runtime_low_strictness.set_pcm_soft_cap_samples(4096);
+    runtime_low_strictness.set_catchup_trigger_strictness_q10(768);
+    runtime_low_strictness.push_pcm_samples(&vec![0.0; 160]);
+
+    run_one_refill(Arc::clone(&runtime_low_strictness), 60);
+    let low_strictness_len = runtime_low_strictness.pcm_len();
+
+    let runtime_high_strictness = Arc::new(AudioDataPlane::new(4096));
+    runtime_high_strictness.set_target_latency_samples(128);
+    runtime_high_strictness.set_pcm_soft_cap_samples(4096);
+    runtime_high_strictness.set_catchup_trigger_strictness_q10(1536);
+    runtime_high_strictness.push_pcm_samples(&vec![0.0; 160]);
+
+    run_one_refill(Arc::clone(&runtime_high_strictness), 60);
+    let high_strictness_len = runtime_high_strictness.pcm_len();
+
+    // Lower strictness should enter catchup earlier and therefore trim more.
+    assert!(low_strictness_len < high_strictness_len);
+}
+
+#[test]
+fn target_latency_changes_resulting_buffer_depth() {
+    let runtime_low_latency = Arc::new(AudioDataPlane::new(4096));
+    runtime_low_latency.set_target_latency_samples(64);
+    runtime_low_latency.set_pcm_soft_cap_samples(4096);
+    runtime_low_latency.set_catchup_trigger_strictness_q10(1024);
+    runtime_low_latency.push_pcm_samples(&vec![0.0; 220]);
+
+    run_one_refill(Arc::clone(&runtime_low_latency), 60);
+    let low_latency_len = runtime_low_latency.pcm_len();
+
+    let runtime_high_latency = Arc::new(AudioDataPlane::new(4096));
+    runtime_high_latency.set_target_latency_samples(192);
+    runtime_high_latency.set_pcm_soft_cap_samples(4096);
+    runtime_high_latency.set_catchup_trigger_strictness_q10(1024);
+    runtime_high_latency.push_pcm_samples(&vec![0.0; 220]);
+
+    run_one_refill(Arc::clone(&runtime_high_latency), 60);
+    let high_latency_len = runtime_high_latency.pcm_len();
+
+    // Lower target latency should trim more aggressively.
+    assert!(low_latency_len < high_latency_len);
+}
+
+#[test]
 fn policy_normal_when_buffered_within_target() {
     let mut host = build_policy_host(128, 1024, 128, 60);
     let next_state = host.preview_buffer_state(1);
@@ -829,10 +892,10 @@ fn policy_normal_when_buffered_within_target() {
 }
 
 #[test]
-fn policy_reenable_initial_catchup_restores_first_trigger_sensitivity() {
+fn policy_reenable_initial_catchup_keeps_drift_guard_entry() {
     // With synth_sample_rate=60 and wanted_len=1:
-    // target=128, drift_guard=129, first-trigger threshold=128.
-    // buffered=129 should trigger catchup only when the one-shot sensitivity is active.
+    // target=128, drift_guard=129.
+    // buffered=129 keeps effective_buffered=128, which stays below drift_guard.
     let mut host = build_policy_host(128, 1024, 129, 60);
     host.set_initial_catchup_enabled(false);
     host.set_initial_catchup_enabled(true);
@@ -840,7 +903,7 @@ fn policy_reenable_initial_catchup_restores_first_trigger_sensitivity() {
     std::thread::sleep(Duration::from_millis(1100));
 
     let next_state = host.preview_buffer_state(1);
-    assert!(matches!(next_state, BufferState::Catchup));
+    assert!(matches!(next_state, BufferState::Normal));
 }
 
 #[test]

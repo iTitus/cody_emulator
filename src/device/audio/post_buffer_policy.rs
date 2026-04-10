@@ -3,7 +3,6 @@
 use crate::device::audio::source::PcmSource;
 use std::sync::Once;
 use std::time::{Duration, Instant};
-use super::CONTACT;
 
 /// Unified buffer management state machine.
 ///
@@ -34,10 +33,13 @@ struct BufferBounds {
     configured_latency_samples: usize,
     soft_cap_samples: usize,
     buffered_samples: usize,
+    buffered_samples_after_callback: usize,
     frame_samples: usize,
     drift_guard_samples: usize,
+    catchup_trigger_samples: usize,
     over_soft_cap: bool,
     target_buffer_samples: usize,
+    underrun_recover_samples: usize,
     max_crossfade_samples: usize,
 }
 
@@ -69,6 +71,14 @@ pub struct BufferPolicyManager {
 }
 
 impl BufferPolicyManager {
+    fn mul_div_round(value: usize, mul: usize, div: usize) -> usize {
+        if div == 0 {
+            return value;
+        }
+        let num = value as u128 * mul as u128;
+        ((num + (div as u128 / 2)) / div as u128) as usize
+    }
+
     /// Creates a buffer policy manager with startup catchup tracking.
     pub fn new() -> Self {
         let now = Instant::now();
@@ -171,6 +181,9 @@ impl BufferPolicyManager {
             );
         }
         let buffered_samples = runtime.pcm_len();
+        // Estimate post-callback queue depth so catchup decisions don't overreact
+        // to transient pre-callback spikes.
+        let buffered_samples_after_callback = buffered_samples.saturating_sub(wanted_len);
         let frame_samples = synth_sample_rate.saturating_div(60).max(1) as usize;
         let drift_guard_samples = if configured_latency_samples > 0 {
             let guard = configured_latency_samples + frame_samples + frame_samples / 4;
@@ -184,16 +197,29 @@ impl BufferPolicyManager {
         } else {
             wanted_len
         };
+        let strictness_q10 = runtime.catchup_trigger_strictness_q10().clamp(768, 1536) as usize;
+        let scaled_trigger = Self::mul_div_round(drift_guard_samples, strictness_q10, 1024);
+        let catchup_trigger_samples = scaled_trigger.clamp(
+            target_buffer_samples,
+            soft_cap_samples.max(target_buffer_samples),
+        );
+        let callback_headroom = runtime
+            .callback_effective_synth_samples()
+            .max(wanted_len.max(16));
+        let underrun_recover_samples = target_buffer_samples.saturating_add(callback_headroom);
         let max_crossfade_samples = frame_samples.saturating_div(2).max(64);
 
         BufferBounds {
             configured_latency_samples,
             soft_cap_samples,
             buffered_samples,
+            buffered_samples_after_callback,
             frame_samples,
             drift_guard_samples,
+            catchup_trigger_samples,
             over_soft_cap,
             target_buffer_samples,
+            underrun_recover_samples,
             max_crossfade_samples,
         }
     }
@@ -211,17 +237,19 @@ impl BufferPolicyManager {
                     - Overrun, UnderrunShadow, UnderrunHold: Buffer is far above soft cap or underrun; aggressive actions taken to avoid latency or generate fallback audio.
                     If you see frequent or persistent Catchup/Overrun states, that may indicate performance issues or misconfigured latency targets.
                 * Occasional BUFFER STATE transitions are fine. Seeing one early during emulation is normal. The audio engine tries to reduce latency early that way.
-                * If you find some weird audio behaviour, contact the author of the emulator or, even better, of the audio subsystem ({CONTACT}).
+                * If you find weird audio behavior, please create an issue with details and include this log output (or a more detailed one if possible).
                 * To disable audio entirely, pass --audio-off. For more options, see --help."#);
             });
             log::warn!(
-                "Audio postprocess: BUFFER STATE CHANGE {:?} -> {:?} (buffered={}, configured_latency={}, target_buffer={}, drift_guard={}, soft_cap={})",
+                "Audio postprocess: BUFFER STATE CHANGE {:?} -> {:?} (buffered={}, buffered_after_callback={}, configured_latency={}, target_buffer={}, drift_guard={}, catchup_trigger={}, soft_cap={})",
                 self.buffer_state,
                 next_state,
                 bounds.buffered_samples,
+                bounds.buffered_samples_after_callback,
                 bounds.configured_latency_samples,
                 bounds.target_buffer_samples,
                 bounds.drift_guard_samples,
+                bounds.catchup_trigger_samples,
                 bounds.soft_cap_samples
             );
         }
@@ -247,19 +275,29 @@ impl BufferPolicyManager {
             && self.stats.initial_gate_open
             && !self.stats.one_shot_catchup_done;
 
-        let drift_guard = bounds.drift_guard_samples.max(bounds.target_buffer_samples);
-        let one_shot_threshold = bounds.target_buffer_samples
-            + drift_guard.saturating_sub(bounds.target_buffer_samples) / 2;
+        if matches!(
+            self.buffer_state,
+            BufferState::UnderrunShadow | BufferState::UnderrunHold
+        ) && bounds.buffered_samples < bounds.underrun_recover_samples
+        {
+            self.log_state_change(self.buffer_state, bounds);
+            return (self.buffer_state, false);
+        }
+
+        let buffered_after_callback = bounds.buffered_samples_after_callback;
 
         let catchup_requested = self.stats.initial_gate_open
             && !bounds.over_soft_cap
             && if self.buffer_state == BufferState::Catchup {
-                bounds.buffered_samples > bounds.target_buffer_samples
-            } else if one_shot_catchup_active {
-                bounds.buffered_samples > one_shot_threshold
+                buffered_after_callback > bounds.target_buffer_samples
             } else {
-                bounds.buffered_samples > drift_guard
+                buffered_after_callback > bounds.catchup_trigger_samples
             };
+
+        if catchup_requested && one_shot_catchup_active {
+            self.stats.one_shot_catchup_done = true;
+            self.stats.one_shot_catchup_forced_off = false;
+        }
 
         let next_state = if bounds.over_soft_cap {
             BufferState::Overrun
@@ -300,11 +338,14 @@ impl BufferPolicyManager {
         missing: usize,
     ) {
         log::trace!(
-            "Audio postprocess: refill bounds buffered={}, target_latency={}, target_buffer={}, drift_guard={}, soft_cap={}, state={:?} -> {:?}, want={}, missing={}",
+            "Audio postprocess: refill bounds buffered={}, buffered_after_callback={}, target_latency={}, target_buffer={}, drift_guard={}, catchup_trigger={}, underrun_recover={}, soft_cap={}, state={:?} -> {:?}, want={}, missing={}",
             bounds.buffered_samples,
+            bounds.buffered_samples_after_callback,
             bounds.configured_latency_samples,
             bounds.target_buffer_samples,
             bounds.drift_guard_samples,
+            bounds.catchup_trigger_samples,
+            bounds.underrun_recover_samples,
             bounds.soft_cap_samples,
             self.buffer_state,
             next_state,
