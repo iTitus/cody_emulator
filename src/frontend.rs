@@ -237,8 +237,8 @@ struct App<M> {
 }
 
 struct State {
-    window: Arc<Window>,
     pixels: Pixels<'static>,
+    window: Arc<Window>,
 }
 
 impl<M: Memory> ApplicationHandler for App<M> {
@@ -286,6 +286,8 @@ impl<M: Memory> ApplicationHandler for App<M> {
         self.input.end_step();
 
         if self.input.close_requested() || self.input.destroyed() {
+            // Drop GPU/surface resources while the event loop is still alive.
+            self.state = None;
             event_loop.exit();
             return;
         }
