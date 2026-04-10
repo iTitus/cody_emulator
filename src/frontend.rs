@@ -12,7 +12,7 @@ use crate::memory::mapped::MappedMemory;
 use log::{info, trace};
 use pixels::{Pixels, ScalingMode, SurfaceTexture};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -44,12 +44,7 @@ pub fn start(
         path.display(),
         if as_cartridge { " as cartridge" } else { "" }
     );
-    let mut data = {
-        let mut buf = vec![];
-        let mut f = File::open(path).expect("error opening binary");
-        f.read_to_end(&mut buf).expect("io error reading binary");
-        buf
-    };
+    let mut data = std::fs::read(path).expect("io error reading binary");
 
     if as_cartridge {
         let cartridge_load_address = u16::from_le_bytes(
@@ -73,15 +68,16 @@ pub fn start(
         );
 
         data = data.drain(4..(len + 4)).collect();
-        load_address = load_address.or(Some(cartridge_load_address));
+        if load_address.is_none() {
+            info!("Using load address 0x{cartridge_load_address:04X} from cartridge header");
+            load_address = Some(cartridge_load_address);
+        }
     }
 
     assert!(!data.is_empty(), "data must not be empty");
     let load_address = load_address.unwrap_or(0xE000);
-    info!(
-        "Loading data at address 0x{load_address:04X}-0x{:04X}",
-        (load_address as usize + data.len() - 1).min(0xFFFF)
-    );
+    let last_written_address = (load_address as usize + data.len() - 1).min(0xFFFF) as u16;
+    info!("Loading data at addresses 0x{load_address:04X}-0x{last_written_address:04X}");
 
     let mut ram = Contiguous::new_ram(0xA000);
     let mut propeller_ram = Contiguous::new_ram(0x4000);
@@ -120,21 +116,40 @@ pub fn start(
     }
     drop(data);
 
-    if let Some(reset_vector) = reset_vector.or(if as_cartridge {
+    if let Some(reset_vector) = reset_vector.or_else(|| if !(load_address..=last_written_address).contains(&cpu::RESET_VECTOR) {
+        // fall back to load address so we directly jump to it on startup
+        info!(
+            "Using load address 0x{load_address:04X} as reset vector, because the reset vector location was not written to"
+        );
         Some(load_address)
     } else {
         None
     }) {
+        // override value set from data
         info!("Setting reset vector to 0x{reset_vector:04X}");
         rom.force_write_u16(cpu::RESET_VECTOR - 0xE000, reset_vector);
+    } else {
+        info!(
+            "Using reset vector 0x{:04X} from ROM", rom.read_u16(cpu::RESET_VECTOR - 0xE000)
+        );
     }
     if let Some(irq_vector) = irq_vector {
         info!("Setting irq vector to 0x{irq_vector:04X}");
         rom.force_write_u16(cpu::IRQ_VECTOR - 0xE000, irq_vector);
+    } else {
+        info!(
+            "Using irq vector 0x{:04X} from ROM",
+            rom.read_u16(cpu::IRQ_VECTOR - 0xE000)
+        );
     }
     if let Some(nmi_vector) = nmi_vector {
         info!("Setting nmi vector to 0x{nmi_vector:04X}");
         rom.force_write_u16(cpu::NMI_VECTOR - 0xE000, nmi_vector);
+    } else {
+        info!(
+            "Using nmi vector 0x{:04X} from ROM",
+            rom.read_u16(cpu::NMI_VECTOR - 0xE000)
+        );
     }
 
     let mut memory = MappedMemory::new();
@@ -148,10 +163,20 @@ pub fn start(
 
     // TODO: better UART support
     let uart1_data: Vec<u8> = if let Some(path) = uart1_source {
-        let f = File::open(path.as_ref()).expect("error opening uart1 data file");
-        let mut r = BufReader::new(f);
+        let path = path.as_ref();
+        info!(
+            "Loading UART1 source {}{}",
+            path.display(),
+            if fix_newlines {
+                " with fixed newlines"
+            } else {
+                ""
+            }
+        );
         if fix_newlines {
             let mut data = vec![];
+            let f = File::open(path).expect("error opening uart1 data file");
+            let r = BufReader::new(f);
             for l in r.lines().map_while(Result::ok).filter(|l| !l.is_empty()) {
                 data.extend(l.bytes());
                 data.push(b'\n');
@@ -160,10 +185,7 @@ pub fn start(
             data.push(b'\n');
             data
         } else {
-            let mut buf = vec![];
-            r.read_to_end(&mut buf)
-                .expect("error reading uart1 data file");
-            buf
+            std::fs::read(path).expect("error reading uart1 data file")
         }
     } else {
         vec![]
