@@ -71,12 +71,67 @@ pub struct BufferPolicyManager {
 }
 
 impl BufferPolicyManager {
+    const INITIAL_CATCHUP_GATE_DELAY: Duration = Duration::from_millis(300);
+    const CATCHUP_SECS_ONE_SHOT: f64 = 0.10;
+    const CATCHUP_SECS_SEVERE: f64 = 0.12;
+    const CATCHUP_SECS_AGGRESSIVE: f64 = 0.18;
+    const CATCHUP_SECS_MODERATE: f64 = 0.28;
+    const CATCHUP_SECS_GENTLE: f64 = 0.45;
+
     fn mul_div_round(value: usize, mul: usize, div: usize) -> usize {
         if div == 0 {
             return value;
         }
         let num = value as u128 * mul as u128;
         ((num + (div as u128 / 2)) / div as u128) as usize
+    }
+
+    /// Picks the catch-up time constant from backlog severity.
+    ///
+    /// Smaller values reduce latency faster but introduce stronger time-compression.
+    /// We keep minor corrections gentle and only switch to aggressive recovery
+    /// once excess depth is clearly above target.
+    fn catchup_response_secs(
+        excess_samples: usize,
+        target_samples: usize,
+        one_shot_catchup_active: bool,
+    ) -> f64 {
+        if one_shot_catchup_active {
+            return Self::CATCHUP_SECS_ONE_SHOT;
+        }
+
+        let target = target_samples.max(1);
+        let ratio_q10 = Self::mul_div_round(excess_samples, 1024, target);
+        if ratio_q10 >= 3072 {
+            Self::CATCHUP_SECS_SEVERE
+        } else if ratio_q10 >= 1536 {
+            Self::CATCHUP_SECS_AGGRESSIVE
+        } else if ratio_q10 >= 768 {
+            Self::CATCHUP_SECS_MODERATE
+        } else {
+            Self::CATCHUP_SECS_GENTLE
+        }
+    }
+
+    /// Limits catch-up crossfade length during severe backlog recovery.
+    ///
+    /// This keeps long correction bursts from sounding overly "stretched" by
+    /// capping the blend region while still avoiding hard discontinuities.
+    fn catchup_crossfade_cap(
+        max_crossfade_samples: usize,
+        frame_samples: usize,
+        excess_samples: usize,
+        target_samples: usize,
+    ) -> usize {
+        let target = target_samples.max(1);
+        let severe_backlog = excess_samples.saturating_mul(2) >= target.saturating_mul(3);
+        if severe_backlog {
+            max_crossfade_samples
+                .min(frame_samples.saturating_div(3).max(16))
+                .max(1)
+        } else {
+            max_crossfade_samples.max(1)
+        }
     }
 
     /// Creates a buffer policy manager with startup catchup tracking.
@@ -258,7 +313,8 @@ impl BufferPolicyManager {
     /// Chooses the next state and whether one-shot catchup is still active.
     fn select_buffer_state(&mut self, bounds: &BufferBounds, now: Instant) -> (BufferState, bool) {
         if !self.stats.initial_gate_open
-            && now.saturating_duration_since(self.stats.start_instant) >= Duration::from_secs(1)
+            && now.saturating_duration_since(self.stats.start_instant)
+                >= Self::INITIAL_CATCHUP_GATE_DELAY
         {
             self.stats.initial_gate_open = true;
         }
@@ -370,7 +426,11 @@ impl BufferPolicyManager {
                 let excess = bounds
                     .buffered_samples
                     .saturating_sub(bounds.target_buffer_samples);
-                let catchup_secs = 0.5_f64;
+                let catchup_secs = Self::catchup_response_secs(
+                    excess,
+                    bounds.target_buffer_samples,
+                    one_shot_catchup_active,
+                );
                 let rate = excess as f64 / catchup_secs;
                 self.stats.catchup_credit += rate * catchup_elapsed.as_secs_f64();
                 let mut max_skip = bounds.frame_samples.saturating_div(4).max(8);
@@ -385,7 +445,12 @@ impl BufferPolicyManager {
                     to_skip = excess;
                 }
                 if to_skip > 0 {
-                    let planned_fade = to_skip.min(bounds.max_crossfade_samples);
+                    let planned_fade = to_skip.min(Self::catchup_crossfade_cap(
+                        bounds.max_crossfade_samples,
+                        bounds.frame_samples,
+                        excess,
+                        bounds.target_buffer_samples,
+                    ));
                     let pop_skip = to_skip.saturating_sub(planned_fade);
                     for _ in 0..pop_skip {
                         runtime.pop_pcm_front();
