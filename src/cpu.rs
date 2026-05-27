@@ -9,7 +9,7 @@ pub const RESET_VECTOR: u16 = 0xFFFC;
 pub const IRQ_VECTOR: u16 = 0xFFFE;
 
 #[bitfield(u8)]
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub struct Status {
     carry: bool,
     zero: bool,
