@@ -192,18 +192,18 @@ checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
 
 [[package]]
 name = "bitfields"
-version = "2.0.4"
+version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "167aede3e5ac29ed5fc1341d08f2218b22668da439054fbe4b3c7bda1a4fc799"
+checksum = "fcfa94a4107334d7f4c4a8204bb27b8b36c22bff5b5138193c6a1fe8be2bfa11"
 dependencies = [
  "bitfields-impl",
 ]
 
 [[package]]
 name = "bitfields-impl"
-version = "2.0.4"
+version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25fb4b8ab306113bf0fbbb8bd480ee8a77bdafc4bfd1214a43ab40e89fed42d9"
+checksum = "aa32838734395637b5d76f5c6c71b44b4cefa5a851d2e829f611c77eed6d59f4"
 dependencies = [
  "derive_more",
  "getset",
