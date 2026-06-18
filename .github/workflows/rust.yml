@@ -13,7 +13,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal --no-self-update
       - run: rustup component add rustfmt clippy
       - uses: Swatinem/rust-cache@v2
@@ -30,7 +30,7 @@ jobs:
         OS: [ ubuntu-latest, macos-latest, macos-15-intel, windows-latest ]
     runs-on: ${{ matrix.OS }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal --no-self-update
       - run: rustup --version
       - uses: Swatinem/rust-cache@v2
