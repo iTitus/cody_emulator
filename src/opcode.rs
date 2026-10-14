@@ -1,5 +1,5 @@
-use lazy_static::lazy_static;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Opcode {
@@ -519,9 +519,9 @@ pub static OPCODES: [InstructionMeta; 212] = [
     Opcode::WAI.insn0(0xCB, 3), // was Implied
 ];
 
-lazy_static! {
-    /// Lookup table for instructions by opcode byte
-    static ref INSTRUCTION_BY_OPCODE_BYTE: [Option<&'static InstructionMeta>; 256] = {
+/// Lookup table for instructions by opcode byte
+static INSTRUCTION_BY_OPCODE_BYTE: LazyLock<[Option<&'static InstructionMeta>; 256]> =
+    LazyLock::new(|| {
         let mut opcodes: [Option<&'static InstructionMeta>; 256] = [None; 256];
         for opc in &OPCODES {
             let n = opc.byte as usize;
@@ -533,14 +533,14 @@ lazy_static! {
             }
         }
         opcodes
-    };
+    });
 
-    /// Lookup table for instructions by opcode
-    static ref INSTRUCTIONS_BY_OPCODE: HashMap<Opcode, Vec<&'static InstructionMeta>> = {
+/// Lookup table for instructions by opcode
+static INSTRUCTIONS_BY_OPCODE: LazyLock<HashMap<Opcode, Vec<&'static InstructionMeta>>> =
+    LazyLock::new(|| {
         let mut map: HashMap<Opcode, Vec<&'static InstructionMeta>> = HashMap::new();
         for opc in &OPCODES {
             map.entry(opc.opcode).or_default().push(opc);
         }
         map
-    };
-}
+    });
