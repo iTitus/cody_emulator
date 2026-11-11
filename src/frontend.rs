@@ -52,7 +52,7 @@ pub struct MemoryMapEntry {
 #[derive(Debug)]
 pub enum DataSource {
     Path(PathBuf),
-    Data(Vec<u8>),
+    Bytes(Vec<u8>),
     Offset {
         source: Box<DataSource>,
         pos: usize,
@@ -65,7 +65,7 @@ impl DataSource {
     fn read(&self) -> std::io::Result<Vec<u8>> {
         match self {
             DataSource::Path(path) => std::fs::read(path),
-            DataSource::Data(bytes) => Ok(bytes.clone()),
+            DataSource::Bytes(bytes) => Ok(bytes.clone()),
             DataSource::Offset {
                 source,
                 pos,

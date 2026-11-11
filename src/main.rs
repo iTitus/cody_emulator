@@ -147,7 +147,7 @@ pub fn main() {
     if let Some(nmi_vector) = cli.nmi_vector {
         info!("Setting nmi vector to 0x{nmi_vector:04X}");
         memory_map.push(frontend::MemoryMapEntry {
-            source: frontend::DataSource::Data(nmi_vector.to_le_bytes().into()),
+            source: frontend::DataSource::Bytes(nmi_vector.to_le_bytes().into()),
             target: frontend::MemoryMapEntryTarget::Target {
                 pos: cpu::NMI_VECTOR,
                 end: None,
@@ -157,7 +157,7 @@ pub fn main() {
     if let Some(reset_vector) = cli.reset_vector {
         info!("Setting reset vector to 0x{reset_vector:04X}");
         memory_map.push(frontend::MemoryMapEntry {
-            source: frontend::DataSource::Data(reset_vector.to_le_bytes().into()),
+            source: frontend::DataSource::Bytes(reset_vector.to_le_bytes().into()),
             target: frontend::MemoryMapEntryTarget::Target {
                 pos: cpu::RESET_VECTOR,
                 end: None,
@@ -167,7 +167,7 @@ pub fn main() {
     if let Some(irq_vector) = cli.irq_vector {
         info!("Setting irq vector to 0x{irq_vector:04X}");
         memory_map.push(frontend::MemoryMapEntry {
-            source: frontend::DataSource::Data(irq_vector.to_le_bytes().into()),
+            source: frontend::DataSource::Bytes(irq_vector.to_le_bytes().into()),
             target: frontend::MemoryMapEntryTarget::Target {
                 pos: cpu::IRQ_VECTOR,
                 end: None,
