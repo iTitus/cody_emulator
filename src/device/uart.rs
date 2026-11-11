@@ -1,5 +1,5 @@
 use crate::interrupt::Interrupt;
-use crate::memory::Memory;
+use crate::memory::{Device, Memory};
 use log::debug;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -77,6 +77,43 @@ impl Uart {
     }
 }
 
+impl Device for Uart {
+    fn update(&mut self, _cycle: usize) -> Interrupt {
+        // TODO: this is kinda hacky
+        self.update_state();
+        if self.is_enabled() {
+            // transmit
+            {
+                let mut tx = self.transmit_buffer.borrow_mut();
+                while let Some(c) = tx.pop() {
+                    // discard
+                    debug!("UART tx: {:?} ({c})", c as char);
+                }
+            }
+
+            // receive
+            {
+                let mut rx = self.receive_buffer.borrow_mut();
+                while !rx.is_full() {
+                    if let Some(value) = self.source.read() {
+                        rx.push(value);
+                        debug!(
+                            "UART rx: push byte {:?} ({value}), remaining {}/{}",
+                            value as char,
+                            self.source.pos(),
+                            self.source.len(),
+                        )
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Interrupt::none()
+    }
+}
+
 impl Memory for Uart {
     fn read_u8(&mut self, address: u16) -> u8 {
         match address {
@@ -122,41 +159,6 @@ impl Memory for Uart {
                 .set((address - UART_TXBF) as u8, value),
             _ => {}
         }
-    }
-
-    fn update(&mut self, _cycle: usize) -> Interrupt {
-        // TODO: this is kinda hacky
-        self.update_state();
-        if self.is_enabled() {
-            // transmit
-            {
-                let mut tx = self.transmit_buffer.borrow_mut();
-                while let Some(c) = tx.pop() {
-                    // discard
-                    debug!("UART tx: {:?} ({c})", c as char);
-                }
-            }
-
-            // receive
-            {
-                let mut rx = self.receive_buffer.borrow_mut();
-                while !rx.is_full() {
-                    if let Some(value) = self.source.read() {
-                        rx.push(value);
-                        debug!(
-                            "UART rx: push byte {:?} ({value}), remaining {}/{}",
-                            value as char,
-                            self.source.pos(),
-                            self.source.len(),
-                        )
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
-
-        Interrupt::none()
     }
 }
 

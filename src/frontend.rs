@@ -11,9 +11,8 @@ use crate::memory::contiguous::Contiguous;
 use crate::memory::mapped::MappedMemory;
 use log::{info, trace};
 use pixels::{Pixels, ScalingMode, SurfaceTexture};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::io::{BufRead, Cursor};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::sleep;
@@ -25,168 +24,209 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 use winit_input_helper::WinitInputHelper;
 
-#[allow(clippy::too_many_arguments)]
-pub fn start(
-    path: impl AsRef<Path>,
-    as_cartridge: bool,
-    mut load_address: Option<u16>,
-    reset_vector: Option<u16>,
-    irq_vector: Option<u16>,
-    nmi_vector: Option<u16>,
-    uart1_source: Option<impl AsRef<Path>>,
-    fix_newlines: bool,
-    physical_keyboard: bool,
-    fast: bool,
-) {
-    let path = path.as_ref();
-    info!(
-        "Loading binary {}{}",
-        path.display(),
-        if as_cartridge { " as cartridge" } else { "" }
-    );
-    let mut data = std::fs::read(path).expect("io error reading binary");
+pub const RAM_SIZE: u16 = 0xA000;
+pub const PROPELLER_RAM_SIZE: u16 = 0x4000;
+pub const ROM_SIZE: u16 = 0x2000;
+pub const RAM_START: u16 = 0x0000;
+pub const PROPELLER_RAM_START: u16 = RAM_START + RAM_SIZE;
+pub const ROM_START: u16 = RAM_START + RAM_SIZE + PROPELLER_RAM_SIZE;
+pub const FREE_RAM_START: u16 = 0x0200;
 
-    if as_cartridge {
-        let cartridge_load_address = u16::from_le_bytes(
-            data[0..2]
-                .try_into()
-                .expect("cartridge header must be at least 4 bytes"),
-        );
-        let cartridge_end_address = u16::from_le_bytes(
-            data[2..4]
-                .try_into()
-                .expect("cartridge header must be at least 4 bytes"),
-        );
-        let len = (cartridge_end_address as usize)
-            .checked_sub(cartridge_load_address as usize)
-            .and_then(|len| len.checked_add(1))
-            .expect("cartridge start address must be <= end address");
-        assert!(
-            data.len() - 4 >= len,
-            "cartridge data len {} must be >= implied header len {len}",
-            data.len() - 4
-        );
+#[derive(Debug)]
+pub struct FrontendOptions {
+    pub memory_map: Vec<MemoryMapEntry>,
+    pub uart1: Option<DataSource>,
+    pub physical_keyboard: bool,
+    pub fast: bool,
+    pub writable_vectors: bool,
+    /// Try to guess reset vector based on memory map
+    pub guess_reset_vector: bool,
+}
 
-        data = data.drain(4..(len + 4)).collect();
-        if load_address.is_none() {
-            info!("Using load address 0x{cartridge_load_address:04X} from cartridge header");
-            load_address = Some(cartridge_load_address);
-        }
-    }
+#[derive(Debug)]
+pub struct MemoryMapEntry {
+    pub source: DataSource,
+    pub target: MemoryMapEntryTarget,
+}
 
-    assert!(!data.is_empty(), "data must not be empty");
-    let load_address = load_address.unwrap_or(0xE000);
-    let last_written_address = (load_address as usize + data.len() - 1).min(0xFFFF) as u16;
-    info!("Loading data at addresses 0x{load_address:04X}-0x{last_written_address:04X}");
+#[derive(Debug)]
+pub enum DataSource {
+    Path(PathBuf),
+    Data(Vec<u8>),
+    Offset {
+        source: Box<DataSource>,
+        pos: usize,
+        length: Option<usize>,
+    },
+    NormalizedLineEndings(Box<DataSource>),
+}
 
-    let mut ram = Contiguous::new_ram(0xA000);
-    let mut propeller_ram = Contiguous::new_ram(0x4000);
-    let mut rom = Contiguous::new_rom(0x2000);
+impl DataSource {
+    fn read(&self) -> std::io::Result<Vec<u8>> {
+        match self {
+            DataSource::Path(path) => std::fs::read(path),
+            DataSource::Data(bytes) => Ok(bytes.clone()),
+            DataSource::Offset {
+                source,
+                pos,
+                length,
+            } => {
+                let all_bytes = source.read()?;
+                if *pos >= all_bytes.len() {
+                    return Err(std::io::Error::other("out of range".to_string()));
+                }
+                if let Some(length) = length {
+                    let end = all_bytes.len().min(*pos + *length);
+                    Ok(all_bytes[*pos..end].to_vec())
+                } else {
+                    Ok(all_bytes[*pos..].to_vec())
+                }
+            }
+            DataSource::NormalizedLineEndings(source) => {
+                let mut bytes = Cursor::new(source.read()?);
+                let mut result = vec![];
+                loop {
+                    let mut buf = vec![];
+                    let bytes_read = bytes.read_until(b'\n', &mut buf)?;
+                    if bytes_read == 0 {
+                        break;
+                    }
 
-    if load_address >= 0xE000 {
-        rom.force_write_all(load_address - 0xE000, &data);
-    } else if load_address >= 0xA000 {
-        let address = load_address - 0xA000;
+                    if buf.ends_with(b"\n") {
+                        buf.pop();
+                        if buf.ends_with(b"\r") {
+                            buf.pop();
+                        }
+                    }
 
-        let mut remaining = data.len();
-        let to_copy = remaining.min((0x4000 - address) as usize);
-        propeller_ram.force_write_all(address, &data[..to_copy]);
+                    // CodyBASIC does not accept empty lines
+                    if buf.is_empty() {
+                        continue;
+                    }
 
-        remaining -= to_copy;
-        if remaining > 0 {
-            rom.force_write_all(0, &data[to_copy..]);
-        }
-    } else {
-        let mut remaining = data.len();
-        let to_copy = remaining.min((0xA000 - load_address) as usize);
-        ram.force_write_all(load_address, &data[..to_copy]);
-
-        let mut offset = to_copy;
-        remaining -= to_copy;
-        let to_copy = remaining.min(0x4000);
-        if remaining > 0 {
-            propeller_ram.force_write_all(0, &data[offset..(offset + to_copy)]);
-
-            offset += to_copy;
-            remaining -= to_copy;
-            if remaining > 0 {
-                rom.force_write_all(0, &data[offset..]);
+                    result.append(&mut buf);
+                    result.push(b'\n');
+                }
+                result.push(b'\n'); // CodyBASIC requires an additional newline at the end
+                Ok(result)
             }
         }
     }
-    drop(data);
+}
 
-    if let Some(reset_vector) = reset_vector.or_else(|| if !(load_address..=last_written_address).contains(&cpu::RESET_VECTOR) {
-        // fall back to load address so we directly jump to it on startup
-        info!(
-            "Using load address 0x{load_address:04X} as reset vector, because the reset vector location was not written to"
-        );
-        Some(load_address)
-    } else {
-        None
-    }) {
-        // override value set from data
-        info!("Setting reset vector to 0x{reset_vector:04X}");
-        rom.force_write_u16(cpu::RESET_VECTOR - 0xE000, reset_vector);
-    } else {
-        info!(
-            "Using reset vector 0x{:04X} from ROM", rom.read_u16(cpu::RESET_VECTOR - 0xE000)
-        );
-    }
-    if let Some(irq_vector) = irq_vector {
-        info!("Setting irq vector to 0x{irq_vector:04X}");
-        rom.force_write_u16(cpu::IRQ_VECTOR - 0xE000, irq_vector);
-    } else {
-        info!(
-            "Using irq vector 0x{:04X} from ROM",
-            rom.read_u16(cpu::IRQ_VECTOR - 0xE000)
-        );
-    }
-    if let Some(nmi_vector) = nmi_vector {
-        info!("Setting nmi vector to 0x{nmi_vector:04X}");
-        rom.force_write_u16(cpu::NMI_VECTOR - 0xE000, nmi_vector);
-    } else {
-        info!(
-            "Using nmi vector 0x{:04X} from ROM",
-            rom.read_u16(cpu::NMI_VECTOR - 0xE000)
-        );
-    }
+#[derive(Debug)]
+pub enum MemoryMapEntryTarget {
+    Cartridge,
+    Target { pos: u16, end: Option<u16> },
+}
 
+pub fn start(options: FrontendOptions) {
     let mut memory = MappedMemory::new();
-    memory.add_memory(0x0000, 0xA000, ram);
-    memory.add_memory(0xA000, 0x4000, propeller_ram);
-    memory.add_memory(0xE000, 0x2000, rom);
+    {
+        let ram = Contiguous::new_ram(RAM_SIZE);
+        let propeller_ram = Contiguous::new_ram(PROPELLER_RAM_SIZE);
+        let rom = Contiguous::new_rom(ROM_SIZE);
+        memory.add_memory(RAM_START, PROPELLER_RAM_START - 1, ram);
+        memory.add_memory(PROPELLER_RAM_START, ROM_START - 1, propeller_ram);
+        memory.add_memory(ROM_START, 0xFFFF, rom);
+        if options.writable_vectors {
+            // make vectors writable
+            memory.add_memory(
+                cpu::NMI_VECTOR,
+                0xFFFF,
+                Contiguous::new_ram(0xFFFF - cpu::NMI_VECTOR + 1),
+            );
+        }
+    }
+
+    let mut load_addresses = vec![];
+    let mut written_to_reset_vector = false;
+    for e in &options.memory_map {
+        info!("Reading data from {:?}", e.source);
+        let mut data = e.source.read().expect("io error");
+        info!("Got {} bytes", data.len());
+        assert!(!data.is_empty());
+
+        let (start, end) = match &e.target {
+            MemoryMapEntryTarget::Cartridge => {
+                info!("Interpreting as cartridge");
+                assert!(data.len() >= 4, "cartridge header must be at least 4 bytes");
+                let cartridge_load_address = u16::from_le_bytes(
+                    data[0..2]
+                        .try_into()
+                        .expect("cartridge header must be at least 4 bytes"),
+                );
+                let cartridge_end_address = u16::from_le_bytes(
+                    data[2..4]
+                        .try_into()
+                        .expect("cartridge header must be at least 4 bytes"),
+                );
+                let len = (cartridge_end_address as usize)
+                    .checked_sub(cartridge_load_address as usize)
+                    .and_then(|len| len.checked_add(1))
+                    .expect("cartridge start address must be <= end address");
+                assert!(
+                    data.len() - 4 >= len,
+                    "cartridge data len {} must be >= implied header len {len}",
+                    data.len() - 4
+                );
+                data = data[4..len + 4].to_vec();
+                (cartridge_load_address, cartridge_end_address)
+            }
+            MemoryMapEntryTarget::Target { pos, end } => (
+                *pos,
+                if let Some(end) = end {
+                    (*end).min((*pos as usize + data.len() - 1) as u16)
+                } else {
+                    (*pos as usize + data.len() - 1) as u16
+                },
+            ),
+        };
+
+        assert!(
+            start <= end && ((end - start) as usize) < data.len(),
+            "target area must be of equals or smaller size as the source data"
+        );
+        info!(
+            "Writing {} bytes to 0x{start:04X}-0x{end:04X}",
+            end as usize - start as usize + 1
+        );
+
+        // heuristic for valid memory locations
+        if start <= FREE_RAM_START && end >= FREE_RAM_START {
+            // everything before this address is zeropage/stack and should not contain executable code
+            load_addresses.push(FREE_RAM_START);
+        } else if (FREE_RAM_START..cpu::NMI_VECTOR).contains(&start) {
+            // the vectors at the end of memory should not contain executable code
+            load_addresses.push(start);
+        }
+
+        for (target_address, value) in (start..=end).zip(data) {
+            if (cpu::RESET_VECTOR..=cpu::RESET_VECTOR + 1).contains(&target_address) {
+                written_to_reset_vector = true;
+            }
+
+            memory.force_write_u8(target_address, value);
+        }
+    }
+
+    if options.guess_reset_vector && !written_to_reset_vector && load_addresses.len() == 1 {
+        let load_address = load_addresses[0];
+        info!(
+            "Using load address 0x{load_address:04X} as reset vector, because the reset vector was not written to"
+        );
+        memory.force_write_u16(cpu::RESET_VECTOR, load_address);
+    }
+    drop(load_addresses);
 
     let via = Via::default();
     let key_state = Rc::clone(via.get_key_state());
-    memory.add_memory(0x9F00, 0x0100, via);
+    memory.add_memory(0x9F00, 0x9FFF, via);
 
     // TODO: better UART support
-    let uart1_data: Vec<u8> = if let Some(path) = uart1_source {
-        let path = path.as_ref();
-        info!(
-            "Loading UART1 source {}{}",
-            path.display(),
-            if fix_newlines {
-                " with fixed newlines"
-            } else {
-                ""
-            }
-        );
-        if fix_newlines {
-            let mut data = vec![];
-            let f = File::open(path).expect("error opening uart1 data file");
-            let r = BufReader::new(f);
-            for l in r.lines().map_while(Result::ok).filter(|l| !l.is_empty()) {
-                data.extend(l.bytes());
-                data.push(b'\n');
-            }
-            // CodyBASIC requires an empty line to terminate the LOAD command
-            data.push(b'\n');
-            data
-        } else {
-            std::fs::read(path).expect("error reading uart1 data file")
-        }
+    let uart1_data: Vec<u8> = if let Some(source) = &options.uart1 {
+        info!("Loading UART1 from {source:?}");
+        source.read().expect("io error")
     } else {
         vec![]
     };
@@ -195,28 +235,28 @@ pub fn start(
         Rc::clone(uart1.get_receive_buffer()),
         Rc::clone(uart1.get_transmit_buffer()),
     );
-    memory.add_memory(UART1_BASE, UART_END, uart1);
+    memory.add_memory(UART1_BASE, UART1_BASE + UART_END - 1, uart1);
     let uart2 = Uart::new(UartSource::empty());
     let (_uart2_rx, _uart2_tx) = (
         Rc::clone(uart2.get_receive_buffer()),
         Rc::clone(uart2.get_transmit_buffer()),
     );
-    memory.add_memory(UART2_BASE, UART_END, uart2);
+    memory.add_memory(UART2_BASE, UART2_BASE + UART_END - 1, uart2);
 
-    memory.add_memory(0xD000, 0x1, BlankingRegister::default());
+    memory.add_memory(0xD000, 0xD000, BlankingRegister::default());
 
     let mut app = App {
         state: None,
         cpu: Cpu::new(memory),
         keyboard: Keyboard::new(
-            if physical_keyboard {
+            if options.physical_keyboard {
                 KeyboardEmulation::Physical
             } else {
                 KeyboardEmulation::Logical
             },
             key_state,
         ),
-        fast,
+        fast: options.fast,
         last_frame_start: Instant::now(),
         input: WinitInputHelper::new(),
     };

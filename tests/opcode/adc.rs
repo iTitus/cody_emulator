@@ -10,7 +10,7 @@ fn adc_check_immediates(a: u8, b: u8, carry: bool) {
         Opcode::ADC.with(Parameter::Immediate(b)),
         Opcode::STP.instruction(),
     ];
-    let mut memory = Contiguous::new_ram(0x10000);
+    let mut memory = Contiguous::new_max_size_ram();
     assemble(&program, &mut *memory.memory).unwrap();
     memory.write_u16(cpu::RESET_VECTOR, 0x0200);
     let mut cpu = Cpu::new(memory);

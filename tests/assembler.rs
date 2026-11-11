@@ -15,7 +15,7 @@ pub fn test_assemble_labels_1() {
         Opcode::BRA.with(Parameter::label("exit")),
         Opcode::STP.labelled("exit"),
     ];
-    let mut memory = Contiguous::new_ram(0x10000);
+    let mut memory = Contiguous::new_max_size_ram();
     assemble(&program, &mut *memory.memory).unwrap();
     memory.write_u16(cpu::RESET_VECTOR, 0x0200);
     let mut cpu = Cpu::new(memory);
@@ -34,7 +34,7 @@ pub fn test_assemble_labels_2() {
         Opcode::BRA.with(Parameter::label("exit")),
         Opcode::STP.labelled("exit"),
     ];
-    let mut memory = Contiguous::new_ram(0x10000);
+    let mut memory = Contiguous::new_max_size_ram();
     assemble(&program, &mut *memory.memory).unwrap();
     memory.write_u16(cpu::RESET_VECTOR, 0x0200);
     let mut cpu = Cpu::new(memory);
@@ -58,7 +58,7 @@ pub fn test_assemble_bbs_labels() {
         Opcode::BRA.with(Parameter::label("exit")),
         Opcode::STP.labelled("exit"),
     ];
-    let mut memory = Contiguous::new_ram(0x10000);
+    let mut memory = Contiguous::new_max_size_ram();
     assemble(&program, &mut *memory.memory).unwrap();
     memory.write_u16(cpu::RESET_VECTOR, 0x0200);
     let mut cpu = Cpu::new(memory);

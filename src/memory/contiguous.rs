@@ -1,5 +1,4 @@
-use crate::interrupt::Interrupt;
-use crate::memory::Memory;
+use crate::memory::{Device, Memory};
 use std::io::Write;
 use std::marker::PhantomData;
 
@@ -9,54 +8,84 @@ pub struct Contiguous<M = Ram> {
 }
 
 pub trait MemoryMode {
-    fn is_writeable() -> bool;
+    const READABLE: bool;
+    const WRITABLE: bool;
 }
 
 pub struct Ram;
 pub struct Rom;
 
 impl MemoryMode for Ram {
-    fn is_writeable() -> bool {
-        true
-    }
+    const READABLE: bool = true;
+    const WRITABLE: bool = true;
 }
 
 impl MemoryMode for Rom {
-    fn is_writeable() -> bool {
-        false
-    }
+    const READABLE: bool = true;
+    const WRITABLE: bool = false;
 }
 
 impl Contiguous<Ram> {
-    pub fn new_ram(size: usize) -> Self {
+    pub fn new_ram(size: u16) -> Self {
         Self::new(size)
+    }
+
+    pub fn new_max_size_ram() -> Self {
+        Self::new_max_size()
     }
 }
 
 impl Contiguous<Rom> {
-    pub fn new_rom(size: usize) -> Self {
+    pub fn new_rom(size: u16) -> Self {
         Self::new(size)
+    }
+
+    pub fn new_max_size_rom() -> Self {
+        Self::new_max_size()
     }
 }
 
 impl<M: MemoryMode> Contiguous<M> {
-    pub fn new(size: usize) -> Self {
+    pub fn new(size: u16) -> Self {
         Self {
-            memory: vec![0; size].into_boxed_slice(),
+            memory: vec![0; size as usize].into_boxed_slice(),
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn new_max_size() -> Self {
+        Self {
+            memory: vec![0; u16::MAX as usize + 1].into_boxed_slice(),
             _phantom: PhantomData,
         }
     }
 
     /// Create memory with `data` placed at 0, discarding all overhang.
-    pub fn from_bytes(size: usize, data: &[u8]) -> Self {
+    pub fn from_bytes(size: u16, data: &[u8]) -> Self {
         Self::from_bytes_at(size, data, 0)
     }
 
+    /// Create max size memory with `data` placed at 0, discarding all overhang.
+    pub fn from_bytes_max_size(data: &[u8]) -> Self {
+        Self::from_bytes_at_max_size(data, 0)
+    }
+
     /// Create memory with `data` placed at `load_address`, discarding all overhang.
-    pub fn from_bytes_at(size: usize, data: &[u8], load_address: u16) -> Self {
+    pub fn from_bytes_at(size: u16, data: &[u8], load_address: u16) -> Self {
         let mut memory = Self::new(size);
         memory.force_write_all(load_address, data);
         memory
+    }
+
+    /// Create max size memory with `data` placed at `load_address`, discarding all overhang.
+    pub fn from_bytes_at_max_size(data: &[u8], load_address: u16) -> Self {
+        let mut memory = Self::new_max_size();
+        memory.force_write_all(load_address, data);
+        memory
+    }
+
+    pub const fn last(&self) -> u16 {
+        (self.memory.len() - 1) as u16
     }
 
     pub fn force_write_u8(&mut self, address: u16, value: u8) {
@@ -78,18 +107,34 @@ impl<M: MemoryMode> Contiguous<M> {
     }
 }
 
+impl<M: MemoryMode> Device for Contiguous<M> {}
+
 impl<M: MemoryMode> Memory for Contiguous<M> {
     fn read_u8(&mut self, address: u16) -> u8 {
-        self.memory[address as usize % self.memory.len()]
-    }
-
-    fn write_u8(&mut self, address: u16, value: u8) {
-        if M::is_writeable() {
-            self.memory[address as usize % self.memory.len()] = value;
+        if M::READABLE {
+            self.force_read_u8(address)
+        } else {
+            0
         }
     }
 
-    fn update(&mut self, _cycle: usize) -> Interrupt {
-        Interrupt::none()
+    fn write_u8(&mut self, address: u16, value: u8) {
+        if M::WRITABLE {
+            self.force_write_u8(address, value);
+        }
+    }
+
+    fn force_read_u8(&mut self, address: u16) -> u8 {
+        if (address as usize) < self.memory.len() {
+            self.memory[address as usize]
+        } else {
+            0
+        }
+    }
+
+    fn force_write_u8(&mut self, address: u16, value: u8) {
+        if (address as usize) < self.memory.len() {
+            self.memory[address as usize] = value;
+        }
     }
 }

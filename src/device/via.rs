@@ -1,5 +1,5 @@
-use crate::interrupt::Interrupt;
 use crate::memory::Memory;
+use crate::{interrupt::Interrupt, memory::Device};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -76,6 +76,53 @@ impl Via {
     }
 }
 
+impl Device for Via {
+    fn update(&mut self, cycle: usize) -> Interrupt {
+        let cycles_elapsed = cycle.wrapping_sub(self.last_update);
+        self.last_update = cycle;
+
+        let acr = self.registers[VIA_ACR as usize];
+
+        for _ in 0..cycles_elapsed {
+            self.t1_counter = self.t1_counter.wrapping_sub(1);
+            if self.t1_counter == 0 {
+                if self.t1_enabled {
+                    self.set_ifr(self.ifr | 0x40);
+
+                    // if not in continuous mode we stop the interrupt trigger
+                    if (acr & 0x40) == 0 {
+                        self.t1_enabled = false;
+                    }
+                }
+
+                // reset counter to latched value
+                self.t1_counter = self.t1_latch_lo as u16 | (self.t1_latch_hi as u16) << 8;
+
+                if (acr & 0x80) != 0 {
+                    // TODO: flip PB7
+                }
+            }
+
+            if (acr & 0x20) != 0 {
+                // TODO: count PB6 pulses
+            } else {
+                self.t2_counter = self.t2_counter.wrapping_sub(1);
+            }
+
+            if self.t2_counter == 0 && self.t2_enabled {
+                self.set_ifr(self.ifr | 0x20);
+                self.t2_enabled = false;
+            }
+        }
+
+        if (self.ifr & 0x80) != 0 {
+            Interrupt::irq()
+        } else {
+            Interrupt::none()
+        }
+    }
+}
+
 impl Memory for Via {
     fn read_u8(&mut self, address: u16) -> u8 {
         match address {
@@ -126,51 +173,6 @@ impl Memory for Via {
                 self.registers[address as usize] = value;
             }
             _ => {}
-        }
-    }
-
-    fn update(&mut self, cycle: usize) -> Interrupt {
-        let cycles_elapsed = cycle.wrapping_sub(self.last_update);
-        self.last_update = cycle;
-
-        let acr = self.registers[VIA_ACR as usize];
-
-        for _ in 0..cycles_elapsed {
-            self.t1_counter = self.t1_counter.wrapping_sub(1);
-            if self.t1_counter == 0 {
-                if self.t1_enabled {
-                    self.set_ifr(self.ifr | 0x40);
-
-                    // if not in continuous mode we stop the interrupt trigger
-                    if (acr & 0x40) == 0 {
-                        self.t1_enabled = false;
-                    }
-                }
-
-                // reset counter to latched value
-                self.t1_counter = self.t1_latch_lo as u16 | (self.t1_latch_hi as u16) << 8;
-
-                if (acr & 0x80) != 0 {
-                    // TODO: flip PB7
-                }
-            }
-
-            if (acr & 0x20) != 0 {
-                // TODO: count PB6 pulses
-            } else {
-                self.t2_counter = self.t2_counter.wrapping_sub(1);
-            }
-
-            if self.t2_counter == 0 && self.t2_enabled {
-                self.set_ifr(self.ifr | 0x20);
-                self.t2_enabled = false;
-            }
-        }
-
-        if (self.ifr & 0x80) != 0 {
-            Interrupt::irq()
-        } else {
-            Interrupt::none()
         }
     }
 }

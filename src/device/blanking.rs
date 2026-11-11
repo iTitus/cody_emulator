@@ -1,18 +1,12 @@
 use crate::interrupt::Interrupt;
-use crate::memory::Memory;
+use crate::memory::{Device, Memory};
 
 #[derive(Debug, Clone, Default)]
 pub struct BlankingRegister {
     in_blanking_interval: bool,
 }
 
-impl Memory for BlankingRegister {
-    fn read_u8(&mut self, _address: u16) -> u8 {
-        if self.in_blanking_interval { 1 } else { 0 }
-    }
-
-    fn write_u8(&mut self, _address: u16, _value: u8) {}
-
+impl Device for BlankingRegister {
     fn update(&mut self, cycle: usize) -> Interrupt {
         // one (half-)frame is rendered roughly every 60 Hz
         const FPS: f64 = 60.0 / 1.001;
@@ -33,4 +27,12 @@ impl Memory for BlankingRegister {
         self.in_blanking_interval = frame_cycle < VBLANK1_CYCLES;
         Interrupt::none()
     }
+}
+
+impl Memory for BlankingRegister {
+    fn read_u8(&mut self, _address: u16) -> u8 {
+        if self.in_blanking_interval { 1 } else { 0 }
+    }
+
+    fn write_u8(&mut self, _address: u16, _value: u8) {}
 }

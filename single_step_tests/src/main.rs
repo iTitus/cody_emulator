@@ -78,7 +78,7 @@ fn collect_test_cases_from_file(path: impl AsRef<Path>) -> anyhow::Result<Vec<Te
 }
 
 fn execute_test_case(test_case: &TestCase) {
-    let memory = LoggingMemory::new(Contiguous::new_ram(0x10000));
+    let memory = LoggingMemory::new(Contiguous::new_max_size_ram());
     let mut cpu = Cpu::new(memory);
     cpu.pc = test_case.initial.pc;
     cpu.s = test_case.initial.s;
@@ -119,6 +119,7 @@ fn execute_test_case(test_case: &TestCase) {
                 },
                 address: cycle.address(),
                 value: cycle.value(),
+                force: false,
             };
             assert_eq!(
                 memory_access,
