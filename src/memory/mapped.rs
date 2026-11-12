@@ -47,7 +47,8 @@ impl Memory for MappedMemory {
     fn write_u8(&mut self, address: u16, value: u8) {
         for (first, last, memory) in self.memories.iter_mut().rev() {
             if (*first..=*last).contains(&address) {
-                return memory.write_u8(address - *first, value);
+                memory.write_u8(address - *first, value);
+                return;
             }
         }
     }
@@ -64,7 +65,8 @@ impl Memory for MappedMemory {
     fn force_write_u8(&mut self, address: u16, value: u8) {
         for (first, last, memory) in self.memories.iter_mut().rev() {
             if (*first..=*last).contains(&address) {
-                return memory.force_write_u8(address - *first, value);
+                memory.force_write_u8(address - *first, value);
+                return;
             }
         }
     }
