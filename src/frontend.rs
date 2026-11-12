@@ -221,7 +221,7 @@ pub fn start(options: FrontendOptions) {
 
     let via = Via::default();
     let key_state = Rc::clone(via.get_key_state());
-    memory.add_memory(0x9F00, 0x9FFF, via);
+    memory.add_memory(0x9F00, 0x9F0F, via);
 
     // TODO: better UART support
     let uart1_data: Vec<u8> = if let Some(source) = &options.uart1 {
