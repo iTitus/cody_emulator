@@ -226,7 +226,9 @@ pub fn start(options: FrontendOptions) {
     // TODO: better UART support
     let uart1_data: Vec<u8> = if let Some(source) = &options.uart1 {
         info!("Loading UART1 from {source:?}");
-        source.read().expect("io error")
+        let bytes = source.read().expect("io error");
+        info!("Got {} bytes of UART1 data", bytes.len());
+        bytes
     } else {
         vec![]
     };
@@ -244,6 +246,19 @@ pub fn start(options: FrontendOptions) {
     memory.add_memory(UART2_BASE, UART2_BASE + UART_END - 1, uart2);
 
     memory.add_memory(0xD000, 0xD000, BlankingRegister::default());
+
+    info!(
+        "The nmi vector is 0x{:04X}",
+        memory.force_read_u16(cpu::NMI_VECTOR)
+    );
+    info!(
+        "The reset vector is 0x{:04X}",
+        memory.force_read_u16(cpu::RESET_VECTOR)
+    );
+    info!(
+        "The irq vector is 0x{:04X}",
+        memory.force_read_u16(cpu::IRQ_VECTOR)
+    );
 
     let mut app = App {
         state: None,
