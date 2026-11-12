@@ -2,6 +2,7 @@ use crate::cpu;
 use crate::cpu::Cpu;
 use crate::device::blanking::BlankingRegister;
 use crate::device::keyboard::{Keyboard, KeyboardEmulation};
+use crate::device::sid::Sid;
 use crate::device::uart::{UART_END, UART1_BASE, UART2_BASE, Uart, UartSource};
 use crate::device::via::Via;
 use crate::device::vid;
@@ -222,6 +223,9 @@ pub fn start(options: FrontendOptions) {
     let via = Via::default();
     let key_state = Rc::clone(via.get_key_state());
     memory.add_memory(0x9F00, 0x9F0F, via);
+
+    let sid = Sid::default();
+    memory.add_memory(0xD400, 0xD41C, sid);
 
     // TODO: better UART support
     let uart1_data: Vec<u8> = if let Some(source) = &options.uart1 {
