@@ -27,6 +27,7 @@ Options:
       --physical-keyboard            Emulate the keyboard by physically mapping the cody keyboard, without respecting the host's layout
       --fast                         Run the cpu as fast as possible
       --writable-vectors             Make the NMI/RESET/IRQ vectors writable during runtime
+      --no-sound                     Disable sound playback
   -v, --verbose...                   Each time this option is added increases the default logging level
   -h, --help                         Print help (see more with '--help')
   -V, --version                      Print version
