@@ -40,6 +40,7 @@ pub struct FrontendOptions {
     pub physical_keyboard: bool,
     pub fast: bool,
     pub writable_vectors: bool,
+    pub no_sound: bool,
     /// Try to guess reset vector based on memory map
     pub guess_reset_vector: bool,
 }
@@ -121,7 +122,7 @@ pub enum MemoryMapEntryTarget {
     Target { pos: u16, end: Option<u16> },
 }
 
-pub fn start(options: FrontendOptions) {
+pub fn start(options: FrontendOptions) -> Result<(), Box<dyn std::error::Error>> {
     let mut memory = MappedMemory::new();
     {
         let ram = Contiguous::new_ram(RAM_SIZE);
@@ -144,7 +145,7 @@ pub fn start(options: FrontendOptions) {
     let mut written_to_reset_vector = false;
     for e in &options.memory_map {
         info!("Reading data from {:?}", e.source);
-        let mut data = e.source.read().expect("io error");
+        let mut data = e.source.read()?;
         info!("Got {} bytes", data.len());
         assert!(!data.is_empty());
 
@@ -224,13 +225,20 @@ pub fn start(options: FrontendOptions) {
     let key_state = Rc::clone(via.get_key_state());
     memory.add_memory(0x9F00, 0x9F0F, via);
 
-    let sid = Sid::default();
+    #[cfg(feature = "sound")]
+    let sid = if options.no_sound {
+        Sid::new_without_output()
+    } else {
+        Sid::new_with_output()?
+    };
+    #[cfg(not(feature = "sound"))]
+    let sid = Sid::new_without_output();
     memory.add_memory(0xD400, 0xD41C, sid);
 
     // TODO: better UART support
     let uart1_data: Vec<u8> = if let Some(source) = &options.uart1 {
         info!("Loading UART1 from {source:?}");
-        let bytes = source.read().expect("io error");
+        let bytes = source.read()?;
         info!("Got {} bytes of UART1 data", bytes.len());
         bytes
     } else {
@@ -281,9 +289,10 @@ pub fn start(options: FrontendOptions) {
     };
 
     info!("Starting event loop");
-    let event_loop = EventLoop::new().expect("event loop created");
+    let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
-    event_loop.run_app(&mut app).expect("application running");
+    event_loop.run_app(&mut app)?;
+    Ok(())
 }
 
 struct App<M> {

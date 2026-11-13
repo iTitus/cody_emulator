@@ -72,12 +72,16 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     writable_vectors: bool,
 
+    /// Disable sound playback.
+    #[arg(long, default_value_t = false)]
+    no_sound: bool,
+
     /// Each time this option is added increases the default logging level
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
 }
 
-pub fn main() {
+pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     // To change the log level, set the `RUST_LOG` environment variable. See the `env_logger`
@@ -189,8 +193,10 @@ pub fn main() {
         physical_keyboard: cli.physical_keyboard,
         fast: cli.fast,
         writable_vectors: cli.writable_vectors,
+        no_sound: cli.no_sound,
         guess_reset_vector: true,
-    });
+    })?;
+    Ok(())
 }
 
 #[allow(dead_code)]

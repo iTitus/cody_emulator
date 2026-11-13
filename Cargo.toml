@@ -3,7 +3,7 @@ name = "cody_emulator"
 version = "0.1.0"
 authors = ["iTitus"]
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.98"
 repository = "https://github.com/iTitus/cody_emulator"
 license = "MIT"
 
@@ -11,8 +11,12 @@ license = "MIT"
 resolver = "3"
 members = ["single_step_tests"]
 
+[features]
+default = ["sound"]
+sound = ["dep:rodio", "dep:ringbuf"]
+
 [dependencies]
-bitfields = "3.1"
+bitfields = "3.2"
 clap = { version = "4.6", features = ["derive"] }
 clap-num = "1.2"
 env_logger = "0.11"
@@ -27,6 +31,12 @@ bytemuck = { version = "1.25", features = ["derive"] }
 pixels = "0.17"
 winit = "0.30"
 winit_input_helper = "0.17"
+
+# sound
+rodio = { version = "0.23", default-features = false, features = [
+    "playback",
+], optional = true }
+ringbuf = { version = "0.6", optional = true }
 
 [profile.release]
 lto = true

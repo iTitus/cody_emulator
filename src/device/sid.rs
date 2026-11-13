@@ -26,6 +26,8 @@ pub const SID_VOLUME: u16 = 0x18;
 pub const SID_VOICE3_OSCILLATOR: u16 = 0x1B;
 pub const SID_VOICE3_ENVELOPE: u16 = 0x1C;
 
+const SAMPLE_RATE: u32 = 16_000;
+const NOISE_START: u32 = 0xACE1;
 const ATTACK_RATES: [u32; 16] = [
     ((0xFFFFFF / 3) / (16 * 2)),
     ((0xFFFFFF / 3) / (16 * 4)),
@@ -63,7 +65,7 @@ const DECAY_RELEASE_RATES: [u32; 16] = [
     ((0xFFFFFF / 3) / (16 * 24000)),
 ];
 /// the levels are currently broken, a division by 15 is missing
-#[allow(clippy::erasing_op, clippy::identity_op)]
+#[expect(clippy::erasing_op, clippy::identity_op)]
 const SUSTAIN_LEVELS: [u32; 16] = [
     ((0xFFFFFF / 3) * 0),
     ((0xFFFFFF / 3) * 1),
@@ -83,7 +85,6 @@ const SUSTAIN_LEVELS: [u32; 16] = [
     ((0xFFFFFF / 3) * 15),
 ];
 
-#[derive(Debug, Clone)]
 pub struct Sid {
     registers: [u8; SID_VOICE3_ENVELOPE as usize + 1],
     last_fixed_update: usize,
@@ -95,11 +96,14 @@ pub struct Sid {
     amplitude: [u32; 3],
     output: [u32; 3],
     noise: u32,
-    frqa: u32,
+    #[cfg(feature = "sound")]
+    device: Option<rodio::MixerDeviceSink>,
+    #[cfg(feature = "sound")]
+    producer: Option<<ringbuf::HeapRb<i16> as ringbuf::traits::Split>::Prod>,
 }
 
-impl Default for Sid {
-    fn default() -> Self {
+impl Sid {
+    pub fn new_without_output() -> Self {
         Self {
             registers: Default::default(),
             last_fixed_update: Default::default(),
@@ -110,13 +114,68 @@ impl Default for Sid {
             envelope: Default::default(),
             amplitude: Default::default(),
             output: Default::default(),
-            noise: 0xACE1,
-            frqa: Default::default(),
+            noise: NOISE_START,
+            #[cfg(feature = "sound")]
+            device: None,
+            #[cfg(feature = "sound")]
+            producer: None,
         }
     }
-}
 
-impl Sid {
+    #[cfg(feature = "sound")]
+    pub fn new_with_output() -> Result<Self, Box<dyn std::error::Error>> {
+        let mut device = rodio::DeviceSinkBuilder::open_default_sink()?;
+        device.log_on_drop(false);
+
+        Ok(Self {
+            registers: Default::default(),
+            last_fixed_update: Default::default(),
+            state: Default::default(),
+            phase: Default::default(),
+            wave: Default::default(),
+            sync: Default::default(),
+            envelope: Default::default(),
+            amplitude: Default::default(),
+            output: Default::default(),
+            noise: NOISE_START,
+            device: Some(device),
+            producer: None,
+        })
+    }
+
+    fn startup(&mut self) {
+        #[cfg(feature = "sound")]
+        {
+            use log::info;
+            use ringbuf::traits::{Producer, Split};
+            use std::time::Duration;
+
+            if let Some(device) = &mut self.device {
+                // one second of buffer
+                let rb = ringbuf::HeapRb::<i16>::new(SAMPLE_RATE as usize);
+                let (mut producer, consumer) = rb.split();
+
+                const FADE_IN_DURATION: Duration = Duration::from_millis(16);
+                const FADE_IN_SAMPLES: usize =
+                    (SAMPLE_RATE as f64 * FADE_IN_DURATION.as_secs_f64()) as usize;
+                info!("Adding {FADE_IN_SAMPLES} fade-in audio samples");
+                producer.push_iter((0..FADE_IN_SAMPLES).map(|i| {
+                    // t = 0..1
+                    let t: f64 = i as f64 / FADE_IN_SAMPLES as f64;
+                    // omega = pi / 2
+                    const W: f64 = std::f64::consts::PI / 2.0;
+                    // sin(0) = 0, sin(pi/2) = 1
+                    let smoothed = (W * t).sin();
+                    // scale to i16::MIN..0
+                    (smoothed * i16::MIN as f64) as i16
+                }));
+                self.producer = Some(producer);
+
+                device.mixer().add(rodio_output::BufOrSilence(consumer));
+            }
+        }
+    }
+
     fn fixed_update(&mut self) {
         {
             // Galois Linear Feedback Shift Register
@@ -152,7 +211,7 @@ impl Sid {
             // make_wave
             let freq = self.registers[7 * i + SID_VOICE1_FREQ_LO as usize] as u16
                 | (self.registers[7 * i + SID_VOICE1_FREQ_HI as usize] as u16) << 8;
-            let mut temp_phase = self.phase[i] + (freq >> 2) as u32;
+            let mut temp_phase = self.phase[i].wrapping_add((freq >> 2) as u32);
 
             if temp_phase & !0xFFFF != 0 {
                 // we overflowed
@@ -210,27 +269,23 @@ impl Sid {
                         self.state[i] = 1; // enter decay phase
                     }
                 } else {
-                    let sustain_target = SUSTAIN_LEVELS[sustain as usize];
-                    if self.amplitude[i] > sustain_target {
+                    let level_sustain = SUSTAIN_LEVELS[sustain as usize];
+                    if level_sustain < self.amplitude[i] {
                         // decay
                         self.amplitude[i] = self.amplitude[i]
                             .saturating_sub(DECAY_RELEASE_RATES[decay as usize])
-                            .max(sustain_target);
-                    } else {
-                        // sustain
-                        // NO-OP
+                            .max(level_sustain);
                     }
                 }
             } else {
                 // release
                 self.state[i] = 0;
-                if self.amplitude[i] > 0 {
+                if self.amplitude[i] != 0 {
                     self.amplitude[i] =
                         self.amplitude[i].saturating_sub(DECAY_RELEASE_RATES[release as usize]);
                 }
             }
-            self.envelope[i] = self.amplitude[i];
-            self.envelope[i] >>= 8;
+            self.envelope[i] = self.amplitude[i] >> 8;
 
             // make_waveform
             let mut w = self.wave[i];
@@ -241,22 +296,33 @@ impl Sid {
                 }
             }
             self.output[i] = w.wrapping_mul(self.envelope[i]) >> 16;
-
-            // voice_end
-            // NO-OP
         }
 
-        // make_output
-        let filter_mode_volume = self.registers[SID_VOLUME as usize] >> 4;
-        let output_sum = self.output[0].wrapping_add(self.output[1]).wrapping_add(
-            if filter_mode_volume & 0x80 != 0 {
-                0
-            } else {
-                self.output[2]
-            },
-        );
-        let output = output_sum.wrapping_mul((filter_mode_volume & 0x0F) as u32) >> 4;
-        self.frqa = (output.wrapping_sub(0x8000) << 11).wrapping_add(0x80000000);
+        #[cfg(feature = "sound")]
+        {
+            use log::warn;
+            use ringbuf::traits::Producer;
+
+            // make_output
+            let filter_mode_volume = self.registers[SID_VOLUME as usize];
+            let output_sum = self.output[0].wrapping_add(self.output[1]).wrapping_add(
+                if filter_mode_volume & 0x80 != 0 {
+                    // voice 3 is skipped if bit is set
+                    0
+                } else {
+                    self.output[2]
+                },
+            );
+            let output = output_sum.wrapping_mul((filter_mode_volume & 0x0F) as u32) >> 4;
+
+            if let Some(producer) = &mut self.producer {
+                let r = producer.try_push(output.wrapping_sub(0x8000) as i16);
+                if r.is_err() {
+                    warn!("audio buffer overrun");
+                }
+            }
+        }
+
         self.registers[SID_VOICE3_OSCILLATOR as usize] = (self.wave[2] >> 8) as u8;
         self.registers[SID_VOICE3_ENVELOPE as usize] = (self.envelope[2] >> 8) as u8;
     }
@@ -272,6 +338,7 @@ impl Device for Sid {
 
         if cycle == 0 && self.last_fixed_update == 0 {
             // special case for first update
+            self.startup();
             self.fixed_update();
         } else if self.last_fixed_update < current_fixed_update {
             // normal handling and catchup
@@ -305,6 +372,49 @@ impl Memory for Sid {
     fn write_u8(&mut self, address: u16, value: u8) {
         if let SID_VOICE1_FREQ_LO..=SID_VOICE3_ENVELOPE = address {
             self.registers[address as usize] = value;
+        }
+    }
+}
+
+#[cfg(feature = "sound")]
+mod rodio_output {
+    use super::*;
+    use log::warn;
+    use ringbuf::traits::Consumer;
+
+    pub struct BufOrSilence(pub <ringbuf::HeapRb<i16> as ringbuf::traits::Split>::Cons);
+
+    impl Iterator for BufOrSilence {
+        type Item = rodio::Sample;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            // 0 is the equilibrium value (silence)
+            Some(
+                self.0.try_pop().unwrap_or_else(|| {
+                    warn!("audio buffer underrun");
+                    0
+                }) as rodio::Sample
+                    / 32_768.0,
+            )
+        }
+    }
+
+    impl rodio::Source for BufOrSilence {
+        fn current_span_len(&self) -> Option<usize> {
+            None
+        }
+
+        fn channels(&self) -> rodio::ChannelCount {
+            rodio::nz!(1)
+        }
+
+        fn sample_rate(&self) -> rodio::SampleRate {
+            const SR: rodio::SampleRate = rodio::SampleRate::new(SAMPLE_RATE).expect("non-zero");
+            SR
+        }
+
+        fn total_duration(&self) -> Option<std::time::Duration> {
+            None
         }
     }
 }
