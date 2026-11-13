@@ -41,6 +41,7 @@ pub struct FrontendOptions {
     pub fast: bool,
     pub writable_vectors: bool,
     pub no_sound: bool,
+    pub dc_blocker_parameter: Option<f64>,
     /// Try to guess reset vector based on memory map
     pub guess_reset_vector: bool,
 }
@@ -229,7 +230,7 @@ pub fn start(options: FrontendOptions) -> Result<(), Box<dyn std::error::Error>>
     let sid = if options.no_sound {
         Sid::new_without_output()
     } else {
-        Sid::new_with_output()?
+        Sid::new_with_output(options.dc_blocker_parameter.map(|p| p as rodio::Sample))?
     };
     #[cfg(not(feature = "sound"))]
     let sid = Sid::new_without_output();

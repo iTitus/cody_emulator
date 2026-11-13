@@ -76,6 +76,10 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     no_sound: bool,
 
+    /// DC Blocker (Audio Filter) P parameter.
+    #[arg(long, default_value_t = 0.995)]
+    dc_blocker_parameter: f64,
+
     /// Each time this option is added increases the default logging level
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -194,6 +198,11 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         fast: cli.fast,
         writable_vectors: cli.writable_vectors,
         no_sound: cli.no_sound,
+        dc_blocker_parameter: if cli.dc_blocker_parameter > 0.0 {
+            Some(cli.dc_blocker_parameter)
+        } else {
+            None
+        },
         guess_reset_vector: true,
     })?;
     Ok(())

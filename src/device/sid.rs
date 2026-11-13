@@ -100,6 +100,8 @@ pub struct Sid {
     device: Option<rodio::MixerDeviceSink>,
     #[cfg(feature = "sound")]
     producer: Option<<ringbuf::HeapRb<i16> as ringbuf::traits::Split>::Prod>,
+    #[cfg(feature = "sound")]
+    dc_blocker_parameter: Option<rodio::Sample>,
 }
 
 impl Sid {
@@ -119,11 +121,15 @@ impl Sid {
             device: None,
             #[cfg(feature = "sound")]
             producer: None,
+            #[cfg(feature = "sound")]
+            dc_blocker_parameter: None,
         }
     }
 
     #[cfg(feature = "sound")]
-    pub fn new_with_output() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new_with_output(
+        dc_blocker_parameter: Option<rodio::Sample>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut device = rodio::DeviceSinkBuilder::open_default_sink()?;
         device.log_on_drop(false);
 
@@ -140,38 +146,30 @@ impl Sid {
             noise: NOISE_START,
             device: Some(device),
             producer: None,
+            dc_blocker_parameter,
         })
     }
 
     fn startup(&mut self) {
         #[cfg(feature = "sound")]
         {
-            use log::info;
-            use ringbuf::traits::{Producer, Split};
-            use std::time::Duration;
+            use ringbuf::traits::Split;
 
             if let Some(device) = &mut self.device {
                 // one second of buffer
                 let rb = ringbuf::HeapRb::<i16>::new(SAMPLE_RATE as usize);
-                let (mut producer, consumer) = rb.split();
-
-                const FADE_IN_DURATION: Duration = Duration::from_millis(16);
-                const FADE_IN_SAMPLES: usize =
-                    (SAMPLE_RATE as f64 * FADE_IN_DURATION.as_secs_f64()) as usize;
-                info!("Adding {FADE_IN_SAMPLES} fade-in audio samples");
-                producer.push_iter((0..FADE_IN_SAMPLES).map(|i| {
-                    // t = 0..1
-                    let t: f64 = i as f64 / FADE_IN_SAMPLES as f64;
-                    // omega = pi / 2
-                    const W: f64 = std::f64::consts::PI / 2.0;
-                    // sin(0) = 0, sin(pi/2) = 1
-                    let smoothed = (W * t).sin();
-                    // scale to i16::MIN..0
-                    (smoothed * i16::MIN as f64) as i16
-                }));
+                let (producer, consumer) = rb.split();
                 self.producer = Some(producer);
 
-                device.mixer().add(rodio_output::BufOrSilence(consumer));
+                let source = rodio_output::MonoRbSource::new_with_fallback(consumer, i16::MIN);
+                if let Some(dc_blocker_parameter) = self.dc_blocker_parameter {
+                    device.mixer().add(rodio_output::MonoDcBlocker::new(
+                        source,
+                        dc_blocker_parameter,
+                    ));
+                } else {
+                    device.mixer().add(source);
+                }
             }
         }
     }
@@ -381,25 +379,41 @@ mod rodio_output {
     use super::*;
     use log::warn;
     use ringbuf::traits::Consumer;
+    use std::time::Duration;
 
-    pub struct BufOrSilence(pub <ringbuf::HeapRb<i16> as ringbuf::traits::Split>::Cons);
+    pub struct MonoRbSource {
+        inner: <ringbuf::HeapRb<i16> as ringbuf::traits::Split>::Cons,
+        fallback: i16,
+    }
 
-    impl Iterator for BufOrSilence {
+    impl MonoRbSource {
+        pub fn new_with_fallback(
+            source: <ringbuf::HeapRb<i16> as ringbuf::traits::Split>::Cons,
+            fallback: i16,
+        ) -> Self {
+            Self {
+                inner: source,
+                fallback,
+            }
+        }
+    }
+
+    impl Iterator for MonoRbSource {
         type Item = rodio::Sample;
 
         fn next(&mut self) -> Option<Self::Item> {
             // 0 is the equilibrium value (silence)
             Some(
-                self.0.try_pop().unwrap_or_else(|| {
+                self.inner.try_pop().unwrap_or_else(|| {
                     warn!("audio buffer underrun");
-                    0
+                    self.fallback
                 }) as rodio::Sample
                     / 32_768.0,
             )
         }
     }
 
-    impl rodio::Source for BufOrSilence {
+    impl rodio::Source for MonoRbSource {
         fn current_span_len(&self) -> Option<usize> {
             None
         }
@@ -413,8 +427,75 @@ mod rodio_output {
             SR
         }
 
-        fn total_duration(&self) -> Option<std::time::Duration> {
+        fn total_duration(&self) -> Option<Duration> {
             None
+        }
+    }
+
+    pub struct MonoDcBlocker<S> {
+        inner: S,
+        p: rodio::Sample,
+        last_input: Option<rodio::Sample>,
+        last_output: rodio::Sample,
+    }
+
+    impl<S: rodio::Source> MonoDcBlocker<S> {
+        pub fn new(source: S, p: rodio::Sample) -> Self {
+            assert_eq!(source.channels().get(), 1);
+            Self {
+                inner: source,
+                p,
+                last_input: None,
+                last_output: 0.0,
+            }
+        }
+    }
+
+    impl<S: rodio::Source> Iterator for MonoDcBlocker<S> {
+        type Item = rodio::Sample;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let last_input = if let Some(last_input) = self.last_input {
+                last_input
+            } else {
+                self.inner.next()?
+            };
+            let input = self.inner.next()?;
+            let output = (self.p * self.last_output + (input - last_input)).clamp(-1.0, 1.0);
+            self.last_input = Some(input);
+            self.last_output = output;
+            Some(output)
+        }
+
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            let (lower, upper) = self.inner.size_hint();
+            (lower.saturating_sub(1), upper.map(|x| x.saturating_sub(1)))
+        }
+    }
+
+    impl<S: rodio::Source + ExactSizeIterator> ExactSizeIterator for MonoDcBlocker<S> {}
+
+    impl<S: rodio::Source> rodio::Source for MonoDcBlocker<S> {
+        fn current_span_len(&self) -> Option<usize> {
+            None
+        }
+
+        fn channels(&self) -> rodio::ChannelCount {
+            rodio::nz!(1)
+        }
+
+        fn sample_rate(&self) -> rodio::SampleRate {
+            self.inner.sample_rate()
+        }
+
+        fn total_duration(&self) -> Option<Duration> {
+            self.inner.total_duration().map(|d| {
+                const NANOS_PER_SECOND: u64 = Duration::from_secs(1).as_nanos() as u64;
+
+                d.saturating_sub(Duration::from_nanos(
+                    NANOS_PER_SECOND / self.sample_rate().get() as u64,
+                ))
+            })
         }
     }
 }
