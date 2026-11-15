@@ -33,7 +33,7 @@ impl Keyboard {
     }
 
     fn update_physical(&self, input: &WinitInputHelper) {
-        const MAPPING: [(KeyCode, CodyKeyCode); 38] = [
+        const MAPPING: [(KeyCode, CodyKeyCode); 43] = [
             (KeyCode::KeyQ, CodyKeyCode::KeyQ),
             (KeyCode::KeyE, CodyKeyCode::KeyE),
             (KeyCode::KeyT, CodyKeyCode::KeyT),
@@ -66,13 +66,19 @@ impl Keyboard {
             (KeyCode::KeyY, CodyKeyCode::KeyY),
             (KeyCode::KeyI, CodyKeyCode::KeyI),
             (KeyCode::KeyP, CodyKeyCode::KeyP),
-            // joystick emulation
+            // joystick 1 emulation
             (KeyCode::ArrowUp, CodyKeyCode::Joystick1Up), // up
             (KeyCode::ArrowDown, CodyKeyCode::Joystick1Down), // down
             (KeyCode::ArrowLeft, CodyKeyCode::Joystick1Left), // left
             (KeyCode::ArrowRight, CodyKeyCode::Joystick1Right), // right
             (KeyCode::ShiftLeft, CodyKeyCode::Joystick1Fire), // fire button
             (KeyCode::ShiftRight, CodyKeyCode::Joystick1Fire), // fire button
+            // joystick 2 emulation
+            (KeyCode::Numpad8, CodyKeyCode::Joystick2Up), // up
+            (KeyCode::Numpad2, CodyKeyCode::Joystick2Down), // down
+            (KeyCode::Numpad4, CodyKeyCode::Joystick2Left), // left
+            (KeyCode::Numpad6, CodyKeyCode::Joystick2Right), // right
+            (KeyCode::Numpad5, CodyKeyCode::Joystick2Fire), // fire button
         ];
 
         let mut state = [false; CodyKeyCode::COUNT];

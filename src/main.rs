@@ -61,6 +61,7 @@ struct Cli {
     fix_newlines: bool,
 
     /// Emulate the keyboard by physically mapping the cody keyboard, without respecting the host's layout.
+    /// In physical mode the second joystick is bound to the numpad.
     #[arg(long, default_value_t = false)]
     physical_keyboard: bool,
 

@@ -36,7 +36,7 @@ Options:
       --fix-newlines
           This option will normalize newlines when reading text data for the UART (always use with BASIC code!)
       --physical-keyboard
-          Emulate the keyboard by physically mapping the cody keyboard, without respecting the host's layout
+          Emulate the keyboard by physically mapping the cody keyboard, without respecting the host's layout. In physical mode the second joystick is bound to the numpad
       --fast
           Run the cpu as fast as possible
       --writable-vectors
