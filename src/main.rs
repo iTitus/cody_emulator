@@ -218,6 +218,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         physical_keyboard: cli.physical_keyboard,
         fast: cli.fast,
         writable_vectors: cli.writable_vectors,
+        palette: cli.palette.as_color_array(),
         no_sound: cli.no_sound,
         dc_blocker_parameter: if cli.dc_blocker_parameter > 0.0 {
             Some(cli.dc_blocker_parameter)
@@ -225,7 +226,6 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         },
         guess_reset_vector: true,
-        palette: cli.palette.as_color_array(),
     })?;
     Ok(())
 }
