@@ -64,25 +64,24 @@ const DECAY_RELEASE_RATES: [u32; 16] = [
     ((0xFFFFFF / 3) / (16 * 15000)),
     ((0xFFFFFF / 3) / (16 * 24000)),
 ];
-/// the levels are currently broken, a division by 15 is missing
 #[expect(clippy::erasing_op, clippy::identity_op)]
 const SUSTAIN_LEVELS: [u32; 16] = [
-    ((0xFFFFFF / 3) * 0),
-    ((0xFFFFFF / 3) * 1),
-    ((0xFFFFFF / 3) * 2),
-    ((0xFFFFFF / 3) * 3),
-    ((0xFFFFFF / 3) * 4),
-    ((0xFFFFFF / 3) * 5),
-    ((0xFFFFFF / 3) * 6),
-    ((0xFFFFFF / 3) * 7),
-    ((0xFFFFFF / 3) * 8),
-    ((0xFFFFFF / 3) * 9),
-    ((0xFFFFFF / 3) * 10),
-    ((0xFFFFFF / 3) * 11),
-    ((0xFFFFFF / 3) * 12),
-    ((0xFFFFFF / 3) * 13),
-    ((0xFFFFFF / 3) * 14),
-    ((0xFFFFFF / 3) * 15),
+    ((0xFFFFFF / 3) * 0 / 15),
+    ((0xFFFFFF / 3) * 1 / 15),
+    ((0xFFFFFF / 3) * 2 / 15),
+    ((0xFFFFFF / 3) * 3 / 15),
+    ((0xFFFFFF / 3) * 4 / 15),
+    ((0xFFFFFF / 3) * 5 / 15),
+    ((0xFFFFFF / 3) * 6 / 15),
+    ((0xFFFFFF / 3) * 7 / 15),
+    ((0xFFFFFF / 3) * 8 / 15),
+    ((0xFFFFFF / 3) * 9 / 15),
+    ((0xFFFFFF / 3) * 10 / 15),
+    ((0xFFFFFF / 3) * 11 / 15),
+    ((0xFFFFFF / 3) * 12 / 15),
+    ((0xFFFFFF / 3) * 13 / 15),
+    ((0xFFFFFF / 3) * 14 / 15),
+    ((0xFFFFFF / 3) * 15 / 15),
 ];
 
 pub struct Sid {
