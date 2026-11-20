@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use clap_num::maybe_hex;
 use cody_emulator::assembler::disassemble;
 use cody_emulator::cpu;
@@ -73,6 +73,10 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     writable_vectors: bool,
 
+    /// Color palette used for rendering.
+    #[arg(long, value_enum, default_value_t)]
+    palette: Palette,
+
     /// Disable sound playback.
     #[arg(long, default_value_t = false)]
     no_sound: bool,
@@ -84,6 +88,22 @@ struct Cli {
     /// Each time this option is added increases the default logging level
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
+}
+
+#[derive(Debug, Default, Copy, Clone, ValueEnum)]
+enum Palette {
+    #[default]
+    Standard,
+    Alternative,
+}
+
+impl Palette {
+    fn as_color_array(self) -> [cody_emulator::device::vid::Color; 16] {
+        match self {
+            Palette::Standard => cody_emulator::device::vid::Color::DEFAULT_PALETTE,
+            Palette::Alternative => cody_emulator::device::vid::Color::ALTERNATIVE_PALETTE,
+        }
+    }
 }
 
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -205,6 +225,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         },
         guess_reset_vector: true,
+        palette: cli.palette.as_color_array(),
     })?;
     Ok(())
 }

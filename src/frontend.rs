@@ -5,7 +5,7 @@ use crate::device::keyboard::{Keyboard, KeyboardEmulation};
 use crate::device::sid::Sid;
 use crate::device::uart::{UART_END, UART1_BASE, UART2_BASE, Uart, UartSource};
 use crate::device::via::Via;
-use crate::device::vid;
+use crate::device::vid::{self, Color};
 use crate::device::vid::{HEIGHT, WIDTH};
 use crate::memory::Memory;
 use crate::memory::contiguous::Contiguous;
@@ -40,6 +40,7 @@ pub struct FrontendOptions {
     pub physical_keyboard: bool,
     pub fast: bool,
     pub writable_vectors: bool,
+    pub palette: [Color; 16],
     pub no_sound: bool,
     pub dc_blocker_parameter: Option<f64>,
     /// Try to guess reset vector based on memory map
@@ -284,6 +285,7 @@ pub fn start(options: FrontendOptions) -> Result<(), Box<dyn std::error::Error>>
             },
             key_state,
         ),
+        palette: options.palette,
         fast: options.fast,
         last_frame_start: Instant::now(),
         input: WinitInputHelper::new(),
@@ -300,6 +302,7 @@ struct App<M> {
     state: Option<State>,
     cpu: Cpu<M>,
     keyboard: Keyboard,
+    palette: [Color; 16],
     fast: bool,
     last_frame_start: Instant,
     input: WinitInputHelper,
@@ -342,7 +345,11 @@ impl<M: Memory> ApplicationHandler for App<M> {
             };
 
             let raw_pixels = state.pixels.frame_mut();
-            vid::render_pixels(&mut self.cpu.memory, bytemuck::cast_slice_mut(raw_pixels));
+            vid::render_pixels(
+                &mut self.cpu.memory,
+                bytemuck::cast_slice_mut(raw_pixels),
+                &self.palette,
+            );
             state.pixels.render().expect("render error");
         }
     }

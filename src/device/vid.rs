@@ -41,7 +41,7 @@ impl Color {
     pub const LIGHT_GREEN: Self = Self::rgb(0x99ffb3);
     pub const LIGHT_BLUE: Self = Self::rgb(0xa699ff);
 
-    pub const PALETTE: [Self; 16] = [
+    pub const DEFAULT_PALETTE: [Self; 16] = [
         Self::BLACK,
         Self::WHITE,
         Self::RED,
@@ -60,6 +60,25 @@ impl Color {
         Self::LIGHT_GRAY,
     ];
 
+    pub const ALTERNATIVE_PALETTE: [Self; 16] = [
+        Self::rgb(0x000000), // black
+        Self::rgb(0xffffff), // white
+        Self::rgb(0x880000), // red
+        Self::rgb(0xaaffee), // cyan
+        Self::rgb(0xcc44cc), // purple
+        Self::rgb(0x00cc55), // green
+        Self::rgb(0x0000aa), // blue
+        Self::rgb(0xeeee77), // yellow
+        Self::rgb(0xdd8855), // orange
+        Self::rgb(0x664400), // brown
+        Self::rgb(0xff7777), // light red
+        Self::rgb(0x333333), // dark gray
+        Self::rgb(0x777777), // gray
+        Self::rgb(0xaaff66), // light green
+        Self::rgb(0x0088ff), // light blue
+        Self::rgb(0xbbbbbb), // light gray
+    ];
+
     const fn rgb(color: u32) -> Self {
         Self {
             r: ((color >> 16) & 0xFF) as u8,
@@ -70,7 +89,7 @@ impl Color {
     }
 }
 
-pub fn render_pixels<M: Memory>(memory: &mut M, raw_pixels: &mut [Color]) {
+pub fn render_pixels<M: Memory>(memory: &mut M, raw_pixels: &mut [Color], palette: &[Color; 16]) {
     let (
         disable_video,
         enable_v_scroll,
@@ -92,7 +111,7 @@ pub fn render_pixels<M: Memory>(memory: &mut M, raw_pixels: &mut [Color]) {
     };
 
     let color = memory.read_u8(0xD002);
-    raw_pixels.fill(Color::PALETTE[(color & 0xF) as usize]); // fill with border color
+    raw_pixels.fill(palette[(color & 0xF) as usize]); // fill with border color
     let color_memory_start = 0xA000u16.wrapping_add(0x400 * (color >> 4) as u16);
 
     if disable_video {
@@ -223,7 +242,7 @@ pub fn render_pixels<M: Memory>(memory: &mut M, raw_pixels: &mut [Color]) {
                     palette_index
                 };
 
-                let target_color = Color::PALETTE[palette_index as usize];
+                let target_color = palette[palette_index as usize];
                 if hires_mode {
                     let target_pos =
                         (y as usize + border_y) * WIDTH as usize + (x as usize + border_x);
