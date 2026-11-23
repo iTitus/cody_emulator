@@ -6,6 +6,7 @@ edition = "2024"
 rust-version = "1.98"
 repository = "https://github.com/iTitus/cody_emulator"
 license = "MIT"
+default-run = "cody_emulator"
 
 [workspace]
 resolver = "3"
