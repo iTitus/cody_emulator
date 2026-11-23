@@ -1,4 +1,5 @@
 use crate::memory::Memory;
+use crate::random::Random;
 use crate::{interrupt::Interrupt, memory::Device};
 
 pub const SID_VOICE1_FREQ_LO: u16 = 0x00;
@@ -26,8 +27,9 @@ pub const SID_VOLUME: u16 = 0x18;
 pub const SID_VOICE3_OSCILLATOR: u16 = 0x1B;
 pub const SID_VOICE3_ENVELOPE: u16 = 0x1C;
 
+pub const VOICE_COUNT: usize = 3;
+
 const SAMPLE_RATE: u32 = 16_000;
-const NOISE_START: u32 = 0xACE1;
 const ATTACK_RATES: [u32; 16] = [
     ((0xFFFFFF / 3) / (16 * 2)),
     ((0xFFFFFF / 3) / (16 * 4)),
@@ -84,17 +86,29 @@ const SUSTAIN_LEVELS: [u32; 16] = [
     ((0xFFFFFF / 3) * 15 / 15),
 ];
 
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+enum VoiceState {
+    #[default]
+    Attack,
+    Decay,
+}
+
+#[derive(Debug, Default)]
+struct Voice {
+    state: VoiceState,
+    phase: u16,
+    wave: u16,
+    sync: u8,
+    envelope: u16,
+    amplitude: u32,
+}
+
+#[derive(Default)]
 pub struct Sid {
     registers: [u8; SID_VOICE3_ENVELOPE as usize + 1],
     last_fixed_update: usize,
-    state: [u32; 3],
-    phase: [u32; 3],
-    wave: [u32; 3],
-    sync: [u32; 3],
-    envelope: [u32; 3],
-    amplitude: [u32; 3],
-    output: [u32; 3],
-    noise: u32,
+    rng: Random,
+    voices: [Voice; 3],
     #[cfg(feature = "sound")]
     device: Option<rodio::MixerDeviceSink>,
     #[cfg(feature = "sound")]
@@ -105,24 +119,7 @@ pub struct Sid {
 
 impl Sid {
     pub fn new_without_output() -> Self {
-        Self {
-            registers: Default::default(),
-            last_fixed_update: Default::default(),
-            state: Default::default(),
-            phase: Default::default(),
-            wave: Default::default(),
-            sync: Default::default(),
-            envelope: Default::default(),
-            amplitude: Default::default(),
-            output: Default::default(),
-            noise: NOISE_START,
-            #[cfg(feature = "sound")]
-            device: None,
-            #[cfg(feature = "sound")]
-            producer: None,
-            #[cfg(feature = "sound")]
-            dc_blocker_parameter: None,
-        }
+        Self::default()
     }
 
     #[cfg(feature = "sound")]
@@ -133,19 +130,9 @@ impl Sid {
         device.log_on_drop(false);
 
         Ok(Self {
-            registers: Default::default(),
-            last_fixed_update: Default::default(),
-            state: Default::default(),
-            phase: Default::default(),
-            wave: Default::default(),
-            sync: Default::default(),
-            envelope: Default::default(),
-            amplitude: Default::default(),
-            output: Default::default(),
-            noise: NOISE_START,
             device: Some(device),
-            producer: None,
             dc_blocker_parameter,
+            ..Self::new_without_output()
         })
     }
 
@@ -174,18 +161,10 @@ impl Sid {
     }
 
     fn fixed_update(&mut self) {
-        {
-            // Galois Linear Feedback Shift Register
-            let lsb = self.noise & 0x1;
-            self.noise >>= 1;
-            // equivalent to self.noise ^= (-lsb) & 0xB400;
-            if lsb != 0 {
-                self.noise ^= 0xB400;
-            }
-            self.noise &= 0xFFFF;
-        }
+        let noise = self.rng.next_u16();
 
-        for i in 0..3 {
+        let mut voice_outputs = [0; VOICE_COUNT];
+        for i in 0..VOICE_COUNT {
             // voice_begin
             let control = self.registers[7 * i + SID_VOICE1_CONTROL as usize];
 
@@ -195,59 +174,62 @@ impl Sid {
                 2 => 1,
                 _ => unreachable!(),
             };
-            if self.sync[synced_with] & control as u32 != 0 {
-                self.phase[i] = 0;
+            let [voice, synced_with_voice] = self
+                .voices
+                .get_disjoint_mut([i, synced_with])
+                .expect("valid borrows");
+
+            if synced_with_voice.sync & control != 0 {
+                voice.phase = 0;
             }
 
             if control & 0b0000_1000 != 0 {
-                self.phase[i] = 0;
-                self.amplitude[i] = 0;
-                self.state[i] = 0;
+                voice.phase = 0;
+                voice.amplitude = 0;
+                voice.state = VoiceState::Attack;
             }
 
             // make_wave
             let freq = self.registers[7 * i + SID_VOICE1_FREQ_LO as usize] as u16
                 | (self.registers[7 * i + SID_VOICE1_FREQ_HI as usize] as u16) << 8;
-            let mut temp_phase = self.phase[i].wrapping_add((freq >> 2) as u32);
-
-            if temp_phase & !0xFFFF != 0 {
-                // we overflowed
-                self.sync[i] |= 0b0000_0010;
-            } else {
-                self.sync[i] &= !0b0000_0010
-            }
-            temp_phase &= 0xFFFF;
+            let temp_phase = {
+                let (temp_phase, overflow) = voice.phase.overflowing_add(freq >> 2);
+                if overflow {
+                    voice.sync |= 0b0000_0010;
+                } else {
+                    voice.sync &= !0b0000_0010
+                }
+                temp_phase
+            };
 
             if control & 0b0001_0000 != 0 {
                 // triangle wave
-                let mut w = self.phase[i];
+                let mut w = voice.phase;
                 let nz = w & 0x8000 != 0;
                 w <<= 1;
                 if nz {
                     w ^= 0xFFFF;
                 }
-                w &= 0xFFFF;
-                self.wave[i] = w;
+                voice.wave = w;
             } else if control & 0b0010_0000 != 0 {
                 // sawtooth
-                self.wave[i] = self.phase[i];
+                voice.wave = voice.phase;
             } else if control & 0b0100_0000 != 0 {
                 // pulse
                 let pulse_width = self.registers[7 * i + SID_VOICE1_PULSE_LO as usize] as u16
                     | ((self.registers[7 * i + SID_VOICE1_PULSE_HI as usize] & 0x0F) as u16) << 8;
-                self.wave[i] = if self.phase[i] < (pulse_width << 4) as u32 {
+                voice.wave = if voice.phase < pulse_width << 4 {
                     0xFFFF
                 } else {
                     0
                 };
             } else if control & 0b1000_0000 != 0 {
                 // noise
-                if (self.phase[i] ^ temp_phase) & 0x4000 != 0 {
-                    self.wave[i] = self.noise & 0xFFFF;
+                if (voice.phase ^ temp_phase) & 0x4000 != 0 {
+                    voice.wave = noise;
                 }
             }
-            self.phase[i] = temp_phase;
-            self.wave[i] &= 0xFFFF;
+            voice.phase = temp_phase;
 
             // make_envelope (ADSR)
             let attack = self.registers[7 * i + SID_VOICE1_ATTACK_DECAY as usize] >> 4;
@@ -255,44 +237,50 @@ impl Sid {
             let sustain = self.registers[7 * i + SID_VOICE1_SUSTAIN_RELEASE as usize] >> 4;
             let release = self.registers[7 * i + SID_VOICE1_SUSTAIN_RELEASE as usize] & 0x0F;
             if control & 0b000_0001 != 0 {
-                if self.state[i] == 0 {
-                    // attack
-                    self.amplitude[i] =
-                        self.amplitude[i].saturating_add(ATTACK_RATES[attack as usize]);
+                match voice.state {
+                    VoiceState::Attack => {
+                        voice.amplitude = voice
+                            .amplitude
+                            .saturating_add(ATTACK_RATES[attack as usize]);
 
-                    const MAX_AMPLITUDE: u32 = 0xFFFFFF / 3;
-                    if self.amplitude[i] >= MAX_AMPLITUDE {
-                        self.amplitude[i] = MAX_AMPLITUDE;
-                        self.state[i] = 1; // enter decay phase
+                        const MAX_AMPLITUDE: u32 = 0xFFFFFF / 3;
+                        if voice.amplitude >= MAX_AMPLITUDE {
+                            voice.amplitude = MAX_AMPLITUDE;
+                            voice.state = VoiceState::Decay;
+                        }
                     }
-                } else {
-                    let level_sustain = SUSTAIN_LEVELS[sustain as usize];
-                    if level_sustain < self.amplitude[i] {
-                        // decay
-                        self.amplitude[i] = self.amplitude[i]
-                            .saturating_sub(DECAY_RELEASE_RATES[decay as usize])
-                            .max(level_sustain);
+                    VoiceState::Decay => {
+                        let level_sustain = SUSTAIN_LEVELS[sustain as usize];
+                        if level_sustain < voice.amplitude {
+                            // decay
+                            voice.amplitude = voice
+                                .amplitude
+                                .saturating_sub(DECAY_RELEASE_RATES[decay as usize])
+                                .max(level_sustain);
+                        }
                     }
                 }
             } else {
                 // release
-                self.state[i] = 0;
-                if self.amplitude[i] != 0 {
-                    self.amplitude[i] =
-                        self.amplitude[i].saturating_sub(DECAY_RELEASE_RATES[release as usize]);
+                voice.state = VoiceState::Attack;
+                if voice.amplitude != 0 {
+                    voice.amplitude = voice
+                        .amplitude
+                        .saturating_sub(DECAY_RELEASE_RATES[release as usize]);
                 }
             }
-            self.envelope[i] = self.amplitude[i] >> 8;
+            voice.envelope = (voice.amplitude >> 8) as u16;
 
             // make_waveform
-            let mut w = self.wave[i];
+            let mut w = voice.wave;
             if control & 0b0000_0100 != 0 {
                 // ring modulation
-                if self.phase[synced_with] & 0x8000 != 0 {
+                if synced_with_voice.phase & 0x8000 != 0 {
                     w ^= 0xFFFF;
                 }
             }
-            self.output[i] = w.wrapping_mul(self.envelope[i]) >> 16;
+
+            voice_outputs[i] = ((w as u32).wrapping_mul(voice.envelope as u32) >> 16) as u16;
         }
 
         #[cfg(feature = "sound")]
@@ -302,14 +290,14 @@ impl Sid {
 
             // make_output
             let filter_mode_volume = self.registers[SID_VOLUME as usize];
-            let output_sum = self.output[0].wrapping_add(self.output[1]).wrapping_add(
-                if filter_mode_volume & 0x80 != 0 {
+            let output_sum = (voice_outputs[0] as u32)
+                .wrapping_add(voice_outputs[1] as u32)
+                .wrapping_add(if filter_mode_volume & 0x80 != 0 {
                     // voice 3 is skipped if bit is set
                     0
                 } else {
-                    self.output[2]
-                },
-            );
+                    voice_outputs[2] as u32
+                });
             let output = output_sum.wrapping_mul((filter_mode_volume & 0x0F) as u32) >> 4;
 
             if let Some(producer) = &mut self.producer {
@@ -320,8 +308,8 @@ impl Sid {
             }
         }
 
-        self.registers[SID_VOICE3_OSCILLATOR as usize] = (self.wave[2] >> 8) as u8;
-        self.registers[SID_VOICE3_ENVELOPE as usize] = (self.envelope[2] >> 8) as u8;
+        self.registers[SID_VOICE3_OSCILLATOR as usize] = (self.voices[2].wave >> 8) as u8;
+        self.registers[SID_VOICE3_ENVELOPE as usize] = (self.voices[2].envelope >> 8) as u8;
     }
 }
 

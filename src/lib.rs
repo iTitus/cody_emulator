@@ -5,3 +5,4 @@ pub mod frontend;
 pub mod interrupt;
 pub mod memory;
 pub mod opcode;
+pub mod random;
