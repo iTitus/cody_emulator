@@ -41,10 +41,14 @@ Options:
           Run the cpu as fast as possible
       --writable-vectors
           Make the NMI/RESET/IRQ vectors writable during runtime
+      --palette <PALETTE>
+          Color palette used for rendering [default: standard] [possible values: standard, alternative]
       --no-sound
           Disable sound playback
       --dc-blocker-parameter <DC_BLOCKER_PARAMETER>
           DC Blocker (Audio Filter) P parameter [default: 0.995]
+  -d, --debug
+          Start the gdbstub listening on TCP port 9001 and wait for connection
   -v, --verbose...
           Each time this option is added increases the default logging level
   -h, --help
