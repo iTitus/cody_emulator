@@ -308,7 +308,7 @@ impl gdbstub::target::ext::base::singlethread::SingleThreadBase for Target {
         regs: &<Self::Arch as gdbstub::arch::Arch>::Registers,
     ) -> gdbstub::target::TargetResult<(), Self> {
         self.tx
-            .send(DebuggerToCpuMessage::WriteRegisters(regs.clone()))
+            .send(DebuggerToCpuMessage::WriteRegisters(*regs))
             .map_err(|_| gdbstub::target::TargetError::Fatal(FatalError::ConnectionLost))?;
         Ok(())
     }
