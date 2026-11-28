@@ -85,6 +85,10 @@ struct Cli {
     #[arg(long, default_value_t = 0.995)]
     dc_blocker_parameter: f64,
 
+    /// Start the gdbstub listening on TCP port 9001 and wait for connection.
+    #[arg(short, long, default_value_t = false)]
+    debug: bool,
+
     /// Each time this option is added increases the default logging level
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -225,6 +229,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             None
         },
+        debug_port: cli.debug.then_some(9001),
         guess_reset_vector: true,
     })?;
     Ok(())

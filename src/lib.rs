@@ -1,5 +1,7 @@
 pub mod assembler;
 pub mod cpu;
+#[cfg(feature = "debugger")]
+pub mod debugger;
 pub mod device;
 pub mod frontend;
 pub mod interrupt;

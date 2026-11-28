@@ -13,8 +13,9 @@ resolver = "3"
 members = ["single_step_tests"]
 
 [features]
-default = ["sound"]
+default = ["sound", "debugger"]
 sound = ["dep:rodio", "dep:ringbuf"]
+debugger = ["dep:gdbstub"]
 
 [dependencies]
 bitfields = "3.2"
@@ -26,6 +27,9 @@ log = "0.4"
 num_enum = "0.7"
 strum = { version = "0.28", features = ["derive"] }
 thiserror = "2"
+
+# debugger
+gdbstub = { version = "0.7", optional = true }
 
 # graphics
 bytemuck = { version = "1.25", features = ["derive"] }

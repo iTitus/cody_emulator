@@ -4,7 +4,10 @@ use itertools::Itertools;
 fn main() {
     let ns = all_numbers();
 
-    println!("{:?}", ns.iter().copied().map(rng_to_output).collect::<Vec<_>>());
+    println!(
+        "{:?}",
+        ns.iter().copied().map(rng_to_output).collect::<Vec<_>>()
+    );
 
     let mut counts = ns.iter().copied().map(|n| n >> 8).counts();
     for n in 0..24 {

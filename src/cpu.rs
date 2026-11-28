@@ -24,7 +24,7 @@ pub struct Status {
     negative: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Cpu<M> {
     /// A register
     pub a: u8,
@@ -41,14 +41,35 @@ pub struct Cpu<M> {
     /// memory/bus access
     pub memory: M,
     /// true if running
-    run: bool,
+    pub(crate) run: bool,
     /// true if waiting for interrupt
     wai: bool,
     /// cycles elapsed since turning on
     cycle: usize,
+    #[cfg(feature = "debugger")]
+    pub debugger: Option<crate::debugger::Debugger>,
 }
 
 impl<M: Memory> Cpu<M> {
+    #[cfg(feature = "debugger")]
+    pub fn new_with_debugger(memory: M, debugger: crate::debugger::Debugger) -> Self {
+        let mut cpu = Self {
+            a: 0,
+            x: 0,
+            y: 0,
+            s: 0,
+            p: Status::default(),
+            pc: 0,
+            memory,
+            run: false,
+            wai: false,
+            cycle: 0,
+            debugger: Some(debugger),
+        };
+        cpu.reset();
+        cpu
+    }
+
     pub fn new(memory: M) -> Self {
         let mut cpu = Self {
             a: 0,
@@ -61,6 +82,7 @@ impl<M: Memory> Cpu<M> {
             run: false,
             wai: false,
             cycle: 0,
+            debugger: None,
         };
         cpu.reset();
         cpu
@@ -86,6 +108,19 @@ impl<M: Memory> Cpu<M> {
 
     /// execute one instruction, returns the number of elapsed cycles
     pub fn step_instruction(&mut self) -> u8 {
+        #[cfg(feature = "debugger")]
+        {
+            let next_action = crate::debugger::handle_debugger(self);
+            match next_action {
+                crate::debugger::NextCpuAction::Pause => return 0,
+                crate::debugger::NextCpuAction::Stop => {
+                    self.run = false;
+                    return 0;
+                }
+                crate::debugger::NextCpuAction::Step | crate::debugger::NextCpuAction::Resume => {}
+            }
+        }
+
         if !self.run {
             return 0;
         }

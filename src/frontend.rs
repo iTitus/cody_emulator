@@ -43,6 +43,8 @@ pub struct FrontendOptions {
     pub palette: [Color; 16],
     pub no_sound: bool,
     pub dc_blocker_parameter: Option<f64>,
+    /// If given start the gdbstub on the given port
+    pub debug_port: Option<u16>,
     /// Try to guess reset vector based on memory map
     pub guess_reset_vector: bool,
 }
@@ -274,9 +276,21 @@ pub fn start(options: FrontendOptions) -> Result<(), Box<dyn std::error::Error>>
         memory.force_read_u16(cpu::IRQ_VECTOR)
     );
 
+    #[cfg(feature = "debugger")]
+    let cpu = {
+        if let Some(port) = options.debug_port {
+            info!("Starting gdbstub");
+            let debugger = crate::debugger::start_server(port)?;
+            Cpu::new_with_debugger(memory, debugger)
+        } else {
+            Cpu::new(memory)
+        }
+    };
+    #[cfg(not(feature = "debugger"))]
+    let cpu = Cpu::new(memory);
     let mut app = App {
         state: None,
-        cpu: Cpu::new(memory),
+        cpu,
         keyboard: Keyboard::new(
             if options.physical_keyboard {
                 KeyboardEmulation::Physical
@@ -393,7 +407,18 @@ impl<M: Memory> ApplicationHandler for App<M> {
         let mut total_instructions = 0usize;
         let frame_time = if self.fast {
             while self.last_frame_start.elapsed() < FRAME_DURATION {
-                total_cycles += self.cpu.step_instruction() as usize;
+                let cycles = self.cpu.step_instruction();
+                if !self.cpu.run {
+                    // exit
+                    self.state = None;
+                    event_loop.exit();
+                    return;
+                } else if cycles == 0 {
+                    // cpu is paused
+                    break;
+                }
+
+                total_cycles += cycles as usize;
                 total_instructions += 1;
             }
             let elapsed = self.last_frame_start.elapsed();
@@ -418,6 +443,16 @@ impl<M: Memory> ApplicationHandler for App<M> {
             let mut catchup = Duration::ZERO;
             while catchup < realtime_elapsed {
                 let cycles = self.cpu.step_instruction();
+                if !self.cpu.run {
+                    // exit
+                    self.state = None;
+                    event_loop.exit();
+                    return;
+                } else if cycles == 0 {
+                    // cpu is paused
+                    break;
+                }
+
                 total_cycles += cycles as usize;
                 total_instructions += 1;
                 catchup += CYCLE_DURATION * cycles as u32;
