@@ -47,8 +47,10 @@ Options:
           Disable sound playback
       --dc-blocker-parameter <DC_BLOCKER_PARAMETER>
           DC Blocker (Audio Filter) P parameter [default: 0.995]
-  -d, --debug
-          Start the gdbstub listening on TCP port 9001 and wait for connection
+      --gdb
+          Start the gdbstub and wait for connections
+      --gdb-port <GDB_PORT>
+          Configure the TCP port for the gdbstub [default: 9001]
   -v, --verbose...
           Each time this option is added increases the default logging level
   -h, --help
