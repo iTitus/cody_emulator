@@ -233,7 +233,6 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             None
         },
-        debug: cli.debug,
         gdb_port: cli.gdb.then_some(cli.gdb_port),
         guess_reset_vector: true,
     })?;
