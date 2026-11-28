@@ -48,7 +48,7 @@ pub enum CpuToDebuggerMessage {
     BreakpointHit,
 }
 
-pub fn start_server(port: u16) -> Result<Debugger, Box<dyn Error>> {
+pub fn start_gdbstub(port: u16) -> Result<Debugger, Box<dyn Error>> {
     let (tx1, rx1) = std::sync::mpsc::channel::<CpuToDebuggerMessage>();
     let (tx2, rx2) = std::sync::mpsc::channel::<DebuggerToCpuMessage>();
     let debugger = Debugger {

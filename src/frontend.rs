@@ -44,7 +44,7 @@ pub struct FrontendOptions {
     pub no_sound: bool,
     pub dc_blocker_parameter: Option<f64>,
     /// If given start the gdbstub on the given port
-    pub debug_port: Option<u16>,
+    pub gdb_port: Option<u16>,
     /// Try to guess reset vector based on memory map
     pub guess_reset_vector: bool,
 }
@@ -278,9 +278,9 @@ pub fn start(options: FrontendOptions) -> Result<(), Box<dyn std::error::Error>>
 
     #[cfg(feature = "debugger")]
     let cpu = {
-        if let Some(port) = options.debug_port {
+        if let Some(port) = options.gdb_port {
             info!("Starting gdbstub");
-            let debugger = crate::debugger::start_server(port)?;
+            let debugger = crate::debugger::start_gdbstub(port)?;
             Cpu::new_with_debugger(memory, debugger)
         } else {
             Cpu::new(memory)
@@ -413,13 +413,12 @@ impl<M: Memory> ApplicationHandler for App<M> {
                     self.state = None;
                     event_loop.exit();
                     return;
-                } else if cycles == 0 {
-                    // cpu is paused
-                    break;
                 }
 
-                total_cycles += cycles as usize;
-                total_instructions += 1;
+                if cycles > 0 {
+                    total_cycles += cycles as usize;
+                    total_instructions += 1;
+                }
             }
             let elapsed = self.last_frame_start.elapsed();
             self.last_frame_start = Instant::now();
@@ -448,14 +447,16 @@ impl<M: Memory> ApplicationHandler for App<M> {
                     self.state = None;
                     event_loop.exit();
                     return;
-                } else if cycles == 0 {
-                    // cpu is paused
-                    break;
                 }
 
-                total_cycles += cycles as usize;
-                total_instructions += 1;
-                catchup += CYCLE_DURATION * cycles as u32;
+                if cycles > 0 {
+                    total_cycles += cycles as usize;
+                    total_instructions += 1;
+                    catchup += CYCLE_DURATION * cycles as u32;
+                } else {
+                    // cpu is paused
+                    catchup += CYCLE_DURATION;
+                }
             }
 
             realtime_elapsed
